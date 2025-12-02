@@ -485,18 +485,21 @@ function M.create_layout()
   -- Parent Window
   state.parent_win_id = vim.api.nvim_open_win(state.parent_buf_id, true, win_opts)
   vim.api.nvim_win_set_option(state.parent_win_id, "winfixwidth", true)
+  vim.api.nvim_win_set_option(state.parent_win_id, "winhighlight", "Normal:Normal,FloatBorder:Normal")
 
   -- Current Window
   win_opts.col = col + parent_width + 2 -- +2 for border accounting
   state.current_win_id = vim.api.nvim_open_win(state.current_buf_id, true, win_opts)
   vim.api.nvim_win_set_width(state.current_win_id, current_width)
   vim.api.nvim_win_set_option(state.current_win_id, "winfixwidth", true)
+  vim.api.nvim_win_set_option(state.current_win_id, "winhighlight", "Normal:Normal,FloatBorder:Normal")
 
   -- Preview Window
   win_opts.col = col + parent_width + current_width + 4 -- +4 for two previous windows borders
   state.preview_win_id = vim.api.nvim_open_win(state.preview_buf_id, true, win_opts)
   vim.api.nvim_win_set_width(state.preview_win_id, preview_width)
   vim.api.nvim_win_set_option(state.preview_win_id, "winfixwidth", true)
+  vim.api.nvim_win_set_option(state.preview_win_id, "winhighlight", "Normal:Normal,FloatBorder:Normal")
 
   -- Set initial cursor to the current pane
   vim.api.nvim_set_current_win(state.current_win_id)
