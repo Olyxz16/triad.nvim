@@ -1,0 +1,6 @@
+describe("Triad.nvim", function()
+    it("can be required", function()
+        local status_ok, _ = pcall(require, "triad")
+        assert.is_true(status_ok)
+    end)
+end)
