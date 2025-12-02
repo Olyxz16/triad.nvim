@@ -1,0 +1,25 @@
+{
+  "packages": [
+    "neovim@0.11.2",
+    "luajit",
+    "luarocks",
+    "git@2.46.0",
+    "stylua@0.20.0",
+    "lua-language-server@3.9.1",
+    "ripgrep@14.1.0",
+    "fd@10.1.0"
+  ],
+  "shell": {
+    "init_hook": [
+      "echo Triad.nvim Dev Environment Loaded",
+      "echo LuaJIT: $(luajit -v)",
+      "echo Neovim: $(nvim --version | head -n 1)"
+    ],
+    "scripts": {
+      "dev": "nvim -u dev_init.lua",
+      "format": "stylua lua/ tests/",
+      "lint": "lua-language-server --check lua/",
+      "test": "nvim --headless --noplugin -u tests/minimal_init.lua -c \"luafile tests/tests.lua\"",
+    }
+  }
+}
