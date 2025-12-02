@@ -143,7 +143,25 @@ end
 local oil_augroup_id = vim.api.nvim_create_augroup("TriadOilEngine", { clear = true })
 local preview_augroup_id = vim.api.nvim_create_augroup("TriadPreview", { clear = true })
 local autoclose_augroup_id = vim.api.nvim_create_augroup("TriadAutoClose", { clear = true })
+local autohighlight_augroup_id = vim.api.nvim_create_augroup("TriadAutoHighlight", { clear = true }) -- New augroup for highlight
+
+M.highlight_ns_id = vim.api.nvim_create_namespace("TriadHighlights") -- New namespace for highlight
 local is_closing = false
+
+-- Define the highlight group for the selected line
+vim.api.nvim_set_hl(0, "TriadSelectedLine", { link = "Visual" }) -- Link to 'Visual' by default
+
+--- Helper to set/clear line highlight
+--- @param buf_id number
+--- @param line_num number|nil 1-based line number to highlight, or nil to clear all.
+local function set_line_highlight(buf_id, line_num)
+  if not buf_id or not vim.api.nvim_buf_is_valid(buf_id) then return end
+  vim.api.nvim_buf_clear_namespace(buf_id, M.highlight_ns_id, 0, -1) -- Clear all custom highlights
+
+  if line_num then
+    vim.api.nvim_buf_add_highlight(buf_id, M.highlight_ns_id, "TriadSelectedLine", line_num - 1, 0, -1)
+  end
+end
 
 --- Handles BufWriteCmd for the current pane to manage file system changes.
 local function handle_buf_write()
@@ -252,6 +270,7 @@ function M.close_layout()
   pcall(vim.api.nvim_clear_autocmds, { group = oil_augroup_id })
   pcall(vim.api.nvim_clear_autocmds, { group = preview_augroup_id })
   pcall(vim.api.nvim_clear_autocmds, { group = autoclose_augroup_id })
+  pcall(vim.api.nvim_clear_autocmds, { group = autohighlight_augroup_id })
 
   state.parent_win_id = -1
   state.current_win_id = -1
@@ -287,12 +306,18 @@ end
 function M.enable_nav_mode()
   if not vim.api.nvim_buf_is_valid(state.current_buf_id) then return end
   
+  -- Clear all existing buffer-local normal mode mappings that might conflict
+  local keys_to_clear = { "q", "h", "-", "l", "<CR>", "j", "k", "e", "<Esc>" } -- Add <Esc> if mapped elsewhere
+  for _, key in ipairs(keys_to_clear) do
+    pcall(vim.keymap.del, "n", key, { buffer = state.current_buf_id })
+  end
+
   -- Set Read-Only
   vim.api.nvim_buf_set_option(state.current_buf_id, "modifiable", false)
   
   local opts = { noremap = true, silent = true, buffer = state.current_buf_id }
 
-  -- Navigation Keymaps
+  -- Close panel
   vim.keymap.set("n", "q", function() M.close_layout() end, opts)
 
   -- Parent Directory
@@ -307,8 +332,8 @@ function M.enable_nav_mode()
   vim.keymap.set("n", "h", go_parent, opts)
   vim.keymap.set("n", "-", go_parent, opts)
 
-  -- Enter Directory
-  local enter_dir = function()
+  -- Enter Directory (l key)
+  local enter_dir_only = function()
     local cursor_row = vim.api.nvim_win_get_cursor(0)[1]
     local line_content = vim.api.nvim_buf_get_lines(state.current_buf_id, cursor_row - 1, cursor_row, false)[1]
     if not line_content then return end
@@ -323,56 +348,99 @@ function M.enable_nav_mode()
       M.render_current_pane()
       require("triad.git").fetch_git_status()
       M.enable_nav_mode()
-    else
-        -- File?
     end
   end
-  vim.keymap.set("n", "l", enter_dir, opts)
-  vim.keymap.set("n", "<CR>", enter_dir, opts)
+  vim.keymap.set("n", "l", enter_dir_only, opts)
+
+  -- Open / Enter (CR key)
+  local open_entry = function()
+    local cursor_row = vim.api.nvim_win_get_cursor(0)[1]
+    local line_content = vim.api.nvim_buf_get_lines(state.current_buf_id, cursor_row - 1, cursor_row, false)[1]
+    if not line_content then return end
+
+    local filename = line_content:match("[^%s]*%s?(.*)")
+    local full_path = Path:new(state.current_dir, filename):__tostring()
+    
+    local stat = vim.uv.fs_stat(full_path)
+    if stat and stat.type == "directory" then
+      state.set_current_dir(full_path)
+      M.render_parent_pane()
+      M.render_current_pane()
+      require("triad.git").fetch_git_status()
+      M.enable_nav_mode()
+    elseif stat and stat.type == "file" then
+      -- Open file
+      M.close_layout()
+      if state.prev_win_id and state.prev_win_id ~= -1 and vim.api.nvim_win_is_valid(state.prev_win_id) then
+        vim.api.nvim_set_current_win(state.prev_win_id)
+      end
+      vim.cmd("edit " .. vim.fn.fnameescape(full_path))
+    end
+  end
+  vim.keymap.set("n", "<CR>", open_entry, opts)
+
+  -- Default movement: j, k
+  vim.keymap.set("n", "j", "j", opts)
+  vim.keymap.set("n", "k", "k", opts)
 
   -- Switch to Edit Mode
-  vim.keymap.set("n", "i", function() M.enable_edit_mode() end, opts)
+  vim.keymap.set("n", "e", function() M.enable_edit_mode() end, opts)
+
+  -- Set up CursorMoved autocommand for line highlighting
+  vim.api.nvim_clear_autocmds({ group = autohighlight_augroup_id })
+  vim.api.nvim_create_autocmd("CursorMoved", {
+    group = autohighlight_augroup_id,
+    buffer = state.current_buf_id,
+    callback = vim.schedule_wrap(function()
+      if not vim.api.nvim_buf_is_valid(state.current_buf_id) then return end
+      local cursor_row = vim.api.nvim_win_get_cursor(0)[1]
+      set_line_highlight(state.current_buf_id, cursor_row)
+    end),
+  })
+  -- Initial highlight
+  local initial_cursor_row = vim.api.nvim_win_get_cursor(0)[1]
+  set_line_highlight(state.current_buf_id, initial_cursor_row)
 end
 
 --- Enables Edit Mode (Read-Write, standard Vim keymaps)
 function M.enable_edit_mode()
   if not vim.api.nvim_buf_is_valid(state.current_buf_id) then return end
 
+  -- Clear all existing buffer-local normal mode mappings
+  pcall(vim.keymap.del, "n", "q", { buffer = state.current_buf_id })
+  pcall(vim.keymap.del, "n", "h", { buffer = state.current_buf_id })
+  pcall(vim.keymap.del, "n", "-", { buffer = state.current_buf_id })
+  pcall(vim.keymap.del, "n", "l", { buffer = state.current_buf_id })
+  pcall(vim.keymap.del, "n", "<CR>", { buffer = state.current_buf_id })
+  pcall(vim.keymap.del, "n", "j", { buffer = state.current_buf_id })
+  pcall(vim.keymap.del, "n", "k", { buffer = state.current_buf_id })
+  pcall(vim.keymap.del, "n", "e", { buffer = state.current_buf_id })
+
   -- Set Read-Write
   vim.api.nvim_buf_set_option(state.current_buf_id, "modifiable", true)
 
   local opts = { noremap = true, silent = true, buffer = state.current_buf_id }
 
-  -- Unmap Navigation Keys to allow standard Vim movement/editing
-  pcall(vim.keymap.del, "n", "h", { buffer = state.current_buf_id })
-  pcall(vim.keymap.del, "n", "l", { buffer = state.current_buf_id })
-  -- Keep q? Maybe users want to macro 'q'. But for now let's keep q to close? 
-  -- No, standard vim q is macros. Let's unmap q if we want full Vim.
-  -- But let's leave q mapped for safety unless requested. User said "insert mode" is for writing.
-  -- Let's assume "q" should act as normal q in edit mode.
-  pcall(vim.keymap.del, "n", "q", { buffer = state.current_buf_id })
-  -- Keep '-' and '<CR>'? usually <CR> moves down. '-' moves up lines.
-  -- Let's unmap them to be safe.
-  pcall(vim.keymap.del, "n", "-", { buffer = state.current_buf_id })
-  pcall(vim.keymap.del, "n", "<CR>", { buffer = state.current_buf_id })
-  -- Unmap 'i' so it works as insert
-  pcall(vim.keymap.del, "n", "i", { buffer = state.current_buf_id })
-
   -- Map Esc to exit Edit Mode and Save
   vim.keymap.set("n", "<Esc>", function()
-    vim.cmd("write") -- Sync changes
+    if vim.api.nvim_buf_is_valid(state.current_buf_id) then
+        vim.cmd("write") -- Sync changes
+    end
     M.enable_nav_mode()
   end, opts)
 
-  -- Start Insert
-  vim.cmd("startinsert")
+  -- Ensure we are in Normal mode when entering Edit Mode and cursor is visible
+  vim.cmd("normal! Gzz") 
+  -- No startinsert. User can use any Vim edit command (i, a, o, dd, cw, etc.)
+  -- from Normal mode in this editable buffer.
 end
 
 --- Creates and sets up the three Triad windows (parent, current, preview)
 function M.create_layout()
-  -- ... existing logic ...
-  -- (This replace block targets the end of file, so I need to include create_layout body)
   is_closing = false -- Reset guard
+  
+  -- Capture previous window
+  state.prev_win_id = vim.api.nvim_get_current_win()
 
   local editor_width = vim.api.nvim_get_option("columns")
   local editor_height = vim.api.nvim_get_option("lines")

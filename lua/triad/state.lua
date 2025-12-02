@@ -19,6 +19,7 @@ M.preview_buf_id = -1
 M.parent_win_id = -1
 M.current_win_id = -1
 M.preview_win_id = -1
+M.prev_win_id = -1 -- Window ID before Triad opened
 M.selected_file = ""
 M.file_data = {} -- Stores data about files in the current pane for diffing/renaming
 M.original_file_data = {}
