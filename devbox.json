@@ -13,13 +13,13 @@
     "init_hook": [
       "echo Triad.nvim Dev Environment Loaded",
       "echo LuaJIT: $(luajit -v)",
-      "echo Neovim: $(nvim --version | head -n 1)"
+      "echo Neovim: $(nvim --version | head -n 1)",
     ],
     "scripts": {
-      "dev": "nvim -u dev_init.lua",
+      "dev":    "nvim -u dev_init.lua",
       "format": "stylua lua/ tests/",
-      "lint": "lua-language-server --check lua/",
-      "test": "nvim --headless --noplugin -u tests/minimal_init.lua -c \"luafile tests/tests.lua\"",
-    }
-  }
+      "lint":   "lua-language-server --check lua/",
+      "test":   "nvim --headless --noplugin -u tests/minimal_init.lua -c \"luafile tests/tests.lua\"",
+    },
+  },
 }
