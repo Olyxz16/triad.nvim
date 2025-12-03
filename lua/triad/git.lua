@@ -28,7 +28,7 @@ function M.fetch_git_status()
       -- 2. Get Status
       Job:new({
         command = "git",
-        args = { "status", "--porcelain", "-u" },
+        args = { "status", "--porcelain", "-u", "--ignored" },
         cwd = state.current_dir,
         on_exit = vim.schedule_wrap(function(j_status)
           state.git_status_data = {}

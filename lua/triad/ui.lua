@@ -110,6 +110,9 @@ function M.render_current_pane()
   local lines_to_render = {}
   local git_extmarks = {} -- Stores {line_idx, icon, hl_group}
 
+  -- Resolve current_dir to real path once for consistent git lookup (handles symlinks)
+  local real_current_dir = vim.fn.resolve(state.current_dir)
+
   for i, file_name in ipairs(files) do
     state.original_file_data[i] = Path:new(state.current_dir, file_name):__tostring()
     local display_name = file_name
@@ -128,8 +131,8 @@ function M.render_current_pane()
     end
 
     -- Git status icon (Extmarks)
-    -- Ensure full_path has no trailing slash for lookup, matching git.lua storage
-    local lookup_path = full_path
+    -- Use real_current_dir for lookup key construction to match git's absolute paths
+    local lookup_path = Path:new(real_current_dir, file_name):__tostring()
     if lookup_path:sub(-1) == "/" then lookup_path = lookup_path:sub(1, -2) end
     
     local git_status = state.git_status_data[lookup_path]
