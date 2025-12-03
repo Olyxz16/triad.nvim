@@ -253,7 +253,10 @@ local function set_line_highlight(buf_id, line_num)
   vim.api.nvim_buf_clear_namespace(buf_id, M.highlight_ns_id, 0, -1) -- Clear all custom highlights
 
   if line_num then
-    vim.api.nvim_buf_add_highlight(buf_id, M.highlight_ns_id, "TriadSelectedLine", line_num - 1, 0, -1)
+    vim.api.nvim_buf_set_extmark(buf_id, M.highlight_ns_id, line_num - 1, 0, {
+        line_hl_group = "TriadSelectedLine",
+        priority = 200,
+    })
   end
 end
 
