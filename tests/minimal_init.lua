@@ -48,3 +48,9 @@ vim.cmd("runtime! plugin/triad.lua")
 --    This ensures the :PlenaryBustedDirectory command is registered
 vim.cmd("runtime! plugin/plenary.vim")
 require("plenary.busted")
+
+-- 7. Safety: Mock vim.ui.select to prevent blocking
+--    Any test that expects UI interaction MUST mock this locally.
+vim.ui.select = function(items, opts, on_choice)
+  error("TEST ERROR: vim.ui.select was called without being mocked.\nPrompt: " .. (opts.prompt or "nil") .. "\nItems: " .. vim.inspect(items))
+end

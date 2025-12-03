@@ -24,7 +24,7 @@ describe("Triad Undo", function()
   it("restores deleted line via undo in edit mode", function()
     vim.api.nvim_set_current_dir(temp_dir:absolute())
     triad.open()
-    vim.wait(50)
+    vim.wait(200)
 
     require("triad.ui").enable_edit_mode()
     
@@ -34,7 +34,7 @@ describe("Triad Undo", function()
 
     -- Delete line (dd)
     vim.api.nvim_win_set_cursor(state.current_win_id, {1, 0})
-    vim.cmd("normal! dd")
+    vim.fn.feedkeys("dd", "x")
     
     local lines_after_delete = vim.api.nvim_buf_get_lines(buf, 0, -1, false)
     assert.are_not.same(initial_lines, lines_after_delete)
@@ -44,6 +44,10 @@ describe("Triad Undo", function()
     
     local lines_after_undo = vim.api.nvim_buf_get_lines(buf, 0, -1, false)
     -- Check that the file name is present in the first line
-    assert.is_not_nil(lines_after_undo[1]:match("file.txt"), "Undo should restore the filename")
+    if #lines_after_undo > 0 then
+        assert.is_not_nil(lines_after_undo[1]:match("file.txt"), "Undo should restore the filename. Got: " .. (lines_after_undo[1] or "nil"))
+    else
+        assert.fail("Buffer is empty after undo")
+    end
   end)
 end)

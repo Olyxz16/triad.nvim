@@ -17,8 +17,10 @@ end
 describe("Triad Directory Handling", function()
   local temp_dir
   local subdir_name = "subdir"
+  local original_select
 
   before_each(function()
+    original_select = vim.ui.select
     -- Clean up
     if state.current_win_id and vim.api.nvim_win_is_valid(state.current_win_id) then
        require("triad.ui").close_layout()
@@ -31,6 +33,7 @@ describe("Triad Directory Handling", function()
   end)
 
   after_each(function()
+    vim.ui.select = original_select
     if temp_dir:exists() then
       temp_dir:rm({ recursive = true })
     end
@@ -54,6 +57,8 @@ describe("Triad Directory Handling", function()
   end)
 
   it("creates a new directory when name ends with /", function()
+    vim.ui.select = function(items, opts, on_choice) on_choice("Yes") end
+    
     vim.api.nvim_set_current_dir(temp_dir:absolute())
     triad.open()
     vim.wait(50)
@@ -75,6 +80,8 @@ describe("Triad Directory Handling", function()
   end)
   
   it("creates a new file when name does not end with /", function()
+    vim.ui.select = function(items, opts, on_choice) on_choice("Yes") end
+    
     vim.api.nvim_set_current_dir(temp_dir:absolute())
     triad.open()
     vim.wait(50)

@@ -52,6 +52,7 @@ local function create_triad_buffer(name, buftype)
   vim.api.nvim_buf_set_option(buf_id, "swapfile", false)
   vim.api.nvim_buf_set_option(buf_id, "filetype", "triad")
   vim.api.nvim_buf_set_option(buf_id, "modifiable", false) -- Default to read-only
+  vim.api.nvim_buf_set_option(buf_id, "undolevels", 1000)
   return buf_id
 end
 
@@ -230,28 +231,33 @@ function M.save_changes(on_complete)
 
   -- 2. Parse current lines
   local current_files = {}
+  local current_idx = 1
   for i, line in ipairs(current_lines) do
-    local icon_part, name_part = line:match("^([^%s]*)%s?(.*)")
-    local effective_name = line
-    local raw_name = line
-
-    if name_part and name_part ~= "" then
-       local clean_name_part = name_part:gsub("/$", "")
-       if original_names_set[clean_name_part] then
-          effective_name = clean_name_part
-          raw_name = name_part
-       elseif icon_part == "-" or icon_part:match("[^%z\1-\127]") then 
-          effective_name = clean_name_part
-          raw_name = name_part
-       else
-          effective_name = line:gsub("/$", "")
-          raw_name = line
-       end
-    else
-       effective_name = line:gsub("/$", "")
-       raw_name = line
+    -- Skip empty or whitespace-only lines
+    if line:match("%S") then
+        local icon_part, name_part = line:match("^([^%s]*)%s?(.*)")
+        local effective_name = line
+        local raw_name = line
+    
+        if name_part and name_part ~= "" then
+           local clean_name_part = name_part:gsub("/$", "")
+           if original_names_set[clean_name_part] then
+              effective_name = clean_name_part
+              raw_name = name_part
+           elseif icon_part == "-" or icon_part:match("[^%z\1-\127]") then 
+              effective_name = clean_name_part
+              raw_name = name_part
+           else
+              effective_name = line:gsub("/$", "")
+              raw_name = line
+           end
+        else
+           effective_name = line:gsub("/$", "")
+           raw_name = line
+        end
+        current_files[current_idx] = { raw = raw_name, name = effective_name }
+        current_idx = current_idx + 1
     end
-    current_files[i] = { raw = raw_name, name = effective_name }
   end
 
   -- 3. Calculate Diff
@@ -653,6 +659,14 @@ function M.enable_edit_mode(post_action)
   
   -- Set Read-Write LAST to ensure it sticks
   vim.api.nvim_buf_set_option(state.current_buf_id, "modifiable", true)
+  
+  -- Reset undo history to establish the current state as the baseline.
+  -- This ensures that the first edit (e.g., dd) is undoable back to the initial list.
+  local old_undolevels = vim.api.nvim_buf_get_option(state.current_buf_id, "undolevels")
+  if old_undolevels < 1000 then old_undolevels = 1000 end -- Ensure we have levels
+  
+  vim.api.nvim_buf_set_option(state.current_buf_id, "undolevels", -1)
+  vim.api.nvim_buf_set_option(state.current_buf_id, "undolevels", old_undolevels)
   
   -- Verify
   if not vim.api.nvim_buf_get_option(state.current_buf_id, "modifiable") then
