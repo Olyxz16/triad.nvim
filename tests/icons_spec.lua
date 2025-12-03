@@ -52,4 +52,37 @@ describe("Triad Icons", function()
     assert.is_not_nil(icon)
     assert.are_not.equal("-", icon)
   end)
+
+  it("renders directory icons correctly (distinct from file icons)", function()
+    -- Create a directory named 'lua' which might conflict with lua file icon
+    temp_dir:joinpath("lua"):mkdir()
+    
+    vim.api.nvim_set_current_dir(temp_dir:absolute())
+    triad.open()
+    vim.wait(50)
+
+    local lines = vim.api.nvim_buf_get_lines(state.current_buf_id, 0, -1, false)
+    
+    local lua_dir_line = nil
+    local lua_file_line = nil
+    
+    for _, line in ipairs(lines) do
+      if line:match("lua/$") then -- matches "lua/" directory
+        lua_dir_line = line
+      elseif line:match("file.lua") then
+        lua_file_line = line
+      end
+    end
+    
+    assert.is_not_nil(lua_dir_line, "lua directory line not found")
+    assert.is_not_nil(lua_file_line, "file.lua line not found")
+    
+    local dir_icon = lua_dir_line:match("^([^%s]+)")
+    local file_icon = lua_file_line:match("^([^%s]+)")
+    
+    assert.are_not.equal(dir_icon, file_icon, "Directory 'lua/' should have a different icon than 'file.lua'")
+    
+    -- Optional: Check for specific folder icon if we decide on one.
+    -- For now, just equality check proves they are treated differently.
+  end)
 end)

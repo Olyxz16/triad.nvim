@@ -30,14 +30,11 @@ end
 local function get_devicon(filename, is_dir)
   setup_devicons()
   if devicons then
+    if is_dir then
+      return "", "Directory"
+    end
     local extension = filename:match("^.+%.(.+)$")
     local icon, hl = devicons.get_icon(filename, extension, { default = true })
-    if is_dir then
-        -- nvim-web-devicons usually handles dirs poorly via get_icon, check if there is a specific dir api or just use default
-        -- But let's stick to get_icon for now, maybe override for dirs if needed.
-        -- Actually, let's check if we can just pass nil extension.
-        icon, hl = devicons.get_icon(filename, nil, { default = true })
-    end
     return icon or "", hl or ""
   end
   return "", ""
