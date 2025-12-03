@@ -178,8 +178,8 @@ function M.render_current_pane()
   vim.api.nvim_buf_clear_namespace(state.current_buf_id, M.git_ns_id, 0, -1)
   for _, mark in ipairs(git_extmarks) do
       vim.api.nvim_buf_set_extmark(state.current_buf_id, M.git_ns_id, mark[1], 0, {
-          virt_text = { { mark[2], mark[3] } },
-          virt_text_pos = "right_align",
+          virt_text = { { " ", "Normal" }, { mark[2], mark[3] } }, -- Add a space for padding
+          virt_text_pos = "eol", -- Place at end of line
       })
   end
 end
@@ -195,7 +195,7 @@ M.git_ns_id = vim.api.nvim_create_namespace("TriadGitIcons") -- Namespace for gi
 local is_closing = false
 
 -- Define the highlight group for the selected line
-vim.api.nvim_set_hl(0, "TriadSelectedLine", { link = "Visual" }) -- Link to 'Visual' by default
+vim.api.nvim_set_hl(0, "TriadSelectedLine", { link = "CursorLine" }) -- Link to 'CursorLine' to span full width
 vim.api.nvim_set_hl(0, "TriadGitModified", { link = "GitSignsChange", default = true })
 vim.api.nvim_set_hl(0, "TriadGitAdded", { link = "GitSignsAdd", default = true })
 vim.api.nvim_set_hl(0, "TriadGitDeleted", { link = "GitSignsDelete", default = true })
