@@ -68,6 +68,7 @@ end
 
 --- Renders the contents of the parent directory to the parent pane.
 function M.render_parent_pane()
+  if state.is_edit_mode then return end
   if not state.current_dir then return end
   if not state.parent_buf_id or not vim.api.nvim_buf_is_valid(state.parent_buf_id) then return end
 
@@ -94,6 +95,7 @@ end
 
 --- Renders the contents of the current directory to the current pane.
 function M.render_current_pane()
+  if state.is_edit_mode then return end
   if not state.current_dir then return end
   if not state.current_buf_id or not vim.api.nvim_buf_is_valid(state.current_buf_id) then return end
 
@@ -210,11 +212,12 @@ local function set_line_highlight(buf_id, line_num)
 end
 
 --- Handles BufWriteCmd for the current pane to manage file system changes.
-local function handle_buf_write()
+--- @param on_complete function|nil Callback(success: boolean)
+function M.save_changes(on_complete)
   -- Read current lines from buffer
   local current_lines = vim.api.nvim_buf_get_lines(state.current_buf_id, 0, -1, false)
 
-  -- 1. Identify Original Files (State) FIRST to help with parsing
+  -- 1. Identify Original Files (State)
   local original_names_set = {}
   local original_files_list = {} -- indexed by line number
   local max_orig_line = 0
@@ -230,61 +233,39 @@ local function handle_buf_write()
   for i, line in ipairs(current_lines) do
     local icon_part, name_part = line:match("^([^%s]*)%s?(.*)")
     local effective_name = line
-    local raw_name = line -- for trailing slash check
+    local raw_name = line
 
     if name_part and name_part ~= "" then
-       -- Potential split. Check heuristics.
-       -- If name_part is in original set, it's likely the file (Icon Name).
-       -- Strip trailing slash from name_part for check
        local clean_name_part = name_part:gsub("/$", "")
-       
        if original_names_set[clean_name_part] then
           effective_name = clean_name_part
           raw_name = name_part
        elseif icon_part == "-" or icon_part:match("[^%z\1-\127]") then 
-          -- Icon is "-" or Non-ASCII -> Treat as icon.
           effective_name = clean_name_part
           raw_name = name_part
        else
-          -- Icon is ASCII and not "-" (e.g. "new file") -> Treat whole line as name.
           effective_name = line:gsub("/$", "")
           raw_name = line
        end
     else
-       -- No split (one word), treat as name
        effective_name = line:gsub("/$", "")
        raw_name = line
     end
-    
     current_files[i] = { raw = raw_name, name = effective_name }
   end
 
-  -- 3. Determine Actions
-  --    We use a "pending" set to track processed items.
-  local processed_current = {} -- index -> bool
-  local processed_original = {} -- index -> bool
+  -- 3. Calculate Diff
+  local creates = {}
+  local deletes = {}
+  local renames = {}
+  local processed_current = {}
+  local processed_original = {}
 
-  -- A. Identify Unchanged Files (Keep)
-  --    If a file exists in both original (anywhere) and current (anywhere), it's kept.
-  --    We only mark them processed if they match exactly or we just want to ignore them.
-  --    Actually, we should iterate current lines. If name exists in original set, it's a Keep.
-  --    BUT: If we rename A -> B, and B already exists? (Overwrite?)
-  --    Let's stick to Simple Logic:
-  --    If current[i] exists in original_names_set -> It is NOT a creation. It is a Keep.
-  --    (We don't handle moving reordering on disk, so position doesn't matter for FS, just display).
-  
-  --    Wait, if I rename "foo" to "bar", "foo" is gone, "bar" is new.
-  --    If I simply check "is bar in original", answer is No. So "bar" is candidate for Create.
-  --    If I check "is foo in current", answer is No. So "foo" is candidate for Delete.
-  
-  --    Heuristic for Rename: If original[i] is candidate for delete AND current[i] is candidate for create -> Rename.
-  
-  -- Mark Keeps
+  -- Identify Keeps (Same name exists)
   for i, file_info in ipairs(current_files) do
     if original_names_set[file_info.name] then
         processed_current[i] = true
-        -- We also need to mark the original instance as processed.
-        -- Since names are unique in a dir, we can find it.
+        -- Mark original instance
         for orig_i, orig_data in pairs(original_files_list) do
             if orig_data.name == file_info.name then
                 processed_original[orig_i] = true
@@ -294,97 +275,93 @@ local function handle_buf_write()
     end
   end
 
-  -- Process Remaining Items
-  -- Iterate by line index to catch "Edit Line = Rename" heuristic
   local max_line = math.max(#current_files, max_orig_line)
-  
   for i = 1, max_line do
     local curr = current_files[i]
     local orig = original_files_list[i]
-    
     local is_curr_processed = processed_current[i]
     local is_orig_processed = processed_original[i]
 
     if curr and not is_curr_processed and orig and not is_orig_processed then
-        -- Case: Rename (Edit in place)
-        vim.schedule(function()
-            local new_full_path = Path:new(state.current_dir, curr.name):__tostring()
-            local ok, err = fs.rename(orig.full_path, new_full_path)
-            if not ok then
-               vim.notify("Triad: Failed to rename " .. orig.name .. " to " .. curr.name .. ": " .. err, vim.log.levels.ERROR)
-            end
-        end)
-        -- Treat as processed
+        table.insert(renames, { from = orig, to = curr })
         processed_current[i] = true
         processed_original[i] = true
-
     elseif curr and not is_curr_processed then
-        -- Case: Create (New line inserted, or mismatch)
-        -- Check if directory
-        local is_dir_creation = curr.raw:sub(-1) == "/"
-        vim.schedule(function()
-            local new_full_path = Path:new(state.current_dir, curr.name):__tostring()
-            if is_dir_creation then
-               local ok, err = fs.mkdir(new_full_path)
-               if not ok then vim.notify("Triad: Failed to create dir " .. curr.name .. ": " .. err, vim.log.levels.ERROR) end
-            else
-               local ok, err = fs.touch(new_full_path)
-               if not ok then vim.notify("Triad: Failed to create file " .. curr.name .. ": " .. err, vim.log.levels.ERROR) end
-            end
-        end)
+        table.insert(creates, curr)
         processed_current[i] = true
-
     elseif orig and not is_orig_processed then
-        -- Case: Delete (Line removed, or mismatch)
-        -- But wait! If we inserted a line at top, everything shifts.
-        -- Original[2] might be Current[3].
-        -- Original[2] matches Current[3] (Keep). So Original[2] is processed.
-        -- So this block only runs if the file is GENUINELY missing from current list.
-        -- But my "Mark Keeps" logic above handled finding it anywhere.
-        -- So if we are here, orig is definitely not in current. -> Delete.
-        vim.schedule(function()
-            local ok, err = fs.unlink(orig.full_path)
-            if not ok then
-                -- Check if it was a directory not empty? 
-                -- unlink usually fails on non-empty dirs.
-                -- Users might expect recursive delete? standard `rm` behavior?
-                -- For safety, let's warn.
-                vim.notify("Triad: Failed to delete " .. orig.name .. ": " .. err, vim.log.levels.ERROR)
-            end
-        end)
+        table.insert(deletes, orig)
         processed_original[i] = true
     end
   end
   
-  -- Catch any stragglers if loop limits were off (unlikely with max_line)
-  -- Actually, checking "Delete" for high indices:
+  -- Stragglers
   for line_num, orig_data in pairs(original_files_list) do
       if not processed_original[line_num] then
-         vim.schedule(function()
-            fs.unlink(orig_data.full_path)
-         end)
+         table.insert(deletes, orig_data)
+         processed_original[line_num] = true
       end
   end
-  
-  -- Catch any stragglers for "Create" (if appended at end)
   for i, curr in ipairs(current_files) do
       if not processed_current[i] then
-        local is_dir_creation = curr.raw:sub(-1) == "/"
-        vim.schedule(function()
-            local new_full_path = Path:new(state.current_dir, curr.name):__tostring()
-            if is_dir_creation then
-               fs.mkdir(new_full_path)
-            else
-               fs.touch(new_full_path)
-            end
-        end)
+        table.insert(creates, curr)
+        processed_current[i] = true
       end
   end
 
-  -- Re-render
-  vim.schedule(function()
-    M.render_current_pane()
-    M.render_parent_pane()
+  -- 4. Confirmation Logic
+  local changes_count = #creates + #deletes + #renames
+  if changes_count == 0 then
+      vim.api.nvim_buf_set_option(state.current_buf_id, "modified", false)
+      if on_complete then on_complete(true) end
+      return
+  end
+
+  local summary = {}
+  if #creates > 0 then table.insert(summary, "Create: " .. #creates) end
+  if #renames > 0 then table.insert(summary, "Rename: " .. #renames) end
+  if #deletes > 0 then table.insert(summary, "Delete: " .. #deletes) end
+  
+  local prompt_str = "Apply changes? (" .. table.concat(summary, ", ") .. ")"
+  
+  vim.ui.select({ "Yes", "No" }, {
+    prompt = prompt_str,
+    format_item = function(item) return item end
+  }, function(choice)
+    if choice == "Yes" then
+        -- Apply Changes
+        for _, item in ipairs(renames) do
+            local new_full_path = Path:new(state.current_dir, item.to.name):__tostring()
+            local ok, err = fs.rename(item.from.full_path, new_full_path)
+            if not ok then vim.notify("Triad: Rename failed: " .. err, vim.log.levels.ERROR) end
+        end
+        for _, item in ipairs(creates) do
+            local new_full_path = Path:new(state.current_dir, item.name):__tostring()
+            local is_dir = item.raw:sub(-1) == "/"
+            if is_dir then
+               local ok, err = fs.mkdir(new_full_path)
+               if not ok then vim.notify("Triad: Mkdir failed: " .. err, vim.log.levels.ERROR) end
+            else
+               local ok, err = fs.touch(new_full_path)
+               if not ok then vim.notify("Triad: Touch failed: " .. err, vim.log.levels.ERROR) end
+            end
+        end
+        for _, item in ipairs(deletes) do
+            local ok, err = fs.unlink(item.full_path)
+            if not ok then vim.notify("Triad: Delete failed: " .. err, vim.log.levels.ERROR) end
+        end
+        
+        -- Finalize
+        vim.schedule(function()
+            vim.api.nvim_buf_set_option(state.current_buf_id, "modified", false)
+            M.render_current_pane()
+            M.render_parent_pane()
+            if on_complete then on_complete(true) end
+        end)
+    else
+        vim.notify("Triad: Changes cancelled. Press 'u' to undo edits.")
+        if on_complete then on_complete(false) end
+    end
   end)
 end
 
@@ -393,7 +370,7 @@ function M.setup_file_system_watcher()
   vim.api.nvim_create_autocmd("BufWriteCmd", {
     group = oil_augroup_id,
     buffer = state.current_buf_id,
-    callback = handle_buf_write,
+    callback = function() M.save_changes(nil) end,
   })
 end
 
@@ -487,6 +464,8 @@ end
 function M.enable_nav_mode()
   if not vim.api.nvim_buf_is_valid(state.current_buf_id) then return end
   
+  state.is_edit_mode = false
+
   -- Clear all existing buffer-local normal mode mappings that might conflict
   local keys_to_clear = { "q", "h", "-", "l", "<CR>", "j", "k", "e", "<Esc>" } -- Add <Esc> if mapped elsewhere
   for _, key in ipairs(keys_to_clear) do
@@ -498,8 +477,13 @@ function M.enable_nav_mode()
   
   local opts = { noremap = true, silent = true, buffer = state.current_buf_id }
 
+  -- Re-enable preview watcher since we disabled it in edit mode
+  M.setup_preview_watcher()
+
   -- Close panel
   vim.keymap.set("n", "q", function() M.close_layout() end, opts)
+  
+  -- ... (rest of mappings)
 
   -- Parent Directory
   local go_parent = function()
@@ -585,6 +569,32 @@ function M.enable_nav_mode()
 
   -- Switch to Edit Mode
   vim.keymap.set("n", "e", function() M.enable_edit_mode() end, opts)
+  
+  -- Implicit Edit Mode triggers
+  vim.keymap.set("n", "i", function() 
+      M.enable_edit_mode(function() vim.cmd("startinsert") end) 
+  end, opts)
+  
+  vim.keymap.set("n", "a", function() 
+      M.enable_edit_mode(function() vim.cmd("startinsert") vim.api.nvim_feedkeys(vim.api.nvim_replace_termcodes("<Right>", true, false, true), "n", false) end) 
+      -- Alternatively, just feed "a"? But we are in normal mode. `startinsert` is `i`. `startinsert!` is `A`.
+      -- `a` is `l` + `i`.
+      -- Simpler: feedkeys.
+  end, opts)
+  
+  -- Re-mapping correctly using feedkeys for robust behavior
+  local function trigger_edit(key)
+      return function()
+          M.enable_edit_mode(function()
+              vim.api.nvim_feedkeys(key, "n", false)
+          end)
+      end
+  end
+
+  vim.keymap.set("n", "i", trigger_edit("i"), opts)
+  vim.keymap.set("n", "I", trigger_edit("I"), opts)
+  vim.keymap.set("n", "a", trigger_edit("a"), opts)
+  vim.keymap.set("n", "A", trigger_edit("A"), opts)
 
   -- Set up CursorMoved autocommand for line highlighting
   vim.api.nvim_clear_autocmds({ group = autohighlight_augroup_id })
@@ -603,36 +613,56 @@ function M.enable_nav_mode()
 end
 
 --- Enables Edit Mode (Read-Write, standard Vim keymaps)
-function M.enable_edit_mode()
+--- @param post_action function|nil Optional callback to run after enabling edit mode
+function M.enable_edit_mode(post_action)
   if not vim.api.nvim_buf_is_valid(state.current_buf_id) then return end
+  
+  -- Ensure we are in the correct window for normal commands
+  if state.current_win_id and vim.api.nvim_win_is_valid(state.current_win_id) then
+      vim.api.nvim_set_current_win(state.current_win_id)
+  end
+
+  state.is_edit_mode = true
+
+  -- Disable preview watcher while editing to prevent focus stealing or overhead
+  if state.current_buf_id then
+      pcall(vim.api.nvim_clear_autocmds, { group = preview_augroup_id, buffer = state.current_buf_id })
+  end
 
   -- Clear all existing buffer-local normal mode mappings
-  pcall(vim.keymap.del, "n", "q", { buffer = state.current_buf_id })
-  pcall(vim.keymap.del, "n", "h", { buffer = state.current_buf_id })
-  pcall(vim.keymap.del, "n", "-", { buffer = state.current_buf_id })
-  pcall(vim.keymap.del, "n", "l", { buffer = state.current_buf_id })
-  pcall(vim.keymap.del, "n", "<CR>", { buffer = state.current_buf_id })
-  pcall(vim.keymap.del, "n", "j", { buffer = state.current_buf_id })
-  pcall(vim.keymap.del, "n", "k", { buffer = state.current_buf_id })
-  pcall(vim.keymap.del, "n", "e", { buffer = state.current_buf_id })
-
-  -- Set Read-Write
-  vim.api.nvim_buf_set_option(state.current_buf_id, "modifiable", true)
+  local keys_to_clear = { "q", "h", "-", "l", "<CR>", "j", "k", "e", "i", "a", "I", "A" }
+  for _, key in ipairs(keys_to_clear) do
+      pcall(vim.keymap.del, "n", key, { buffer = state.current_buf_id })
+  end
 
   local opts = { noremap = true, silent = true, buffer = state.current_buf_id }
 
   -- Map Esc to exit Edit Mode and Save
   vim.keymap.set("n", "<Esc>", function()
     if vim.api.nvim_buf_is_valid(state.current_buf_id) then
-        vim.cmd("write") -- Sync changes
+        M.save_changes(function(success)
+            if success then
+                M.enable_nav_mode()
+            end
+        end)
     end
-    M.enable_nav_mode()
   end, opts)
 
-  -- Ensure we are in Normal mode when entering Edit Mode and cursor is visible
+  -- Ensure we are in Normal mode and cursor is visible
   vim.cmd("normal! Gzz") 
-  -- No startinsert. User can use any Vim edit command (i, a, o, dd, cw, etc.)
-  -- from Normal mode in this editable buffer.
+  
+  -- Set Read-Write LAST to ensure it sticks
+  vim.api.nvim_buf_set_option(state.current_buf_id, "modifiable", true)
+  
+  -- Verify
+  if not vim.api.nvim_buf_get_option(state.current_buf_id, "modifiable") then
+      vim.notify("Triad: Failed to set modifiable=true!", vim.log.levels.ERROR)
+  else
+      vim.notify("Triad: Edit Mode Enabled")
+      if post_action then
+          post_action()
+      end
+  end
 end
 
 --- Creates and sets up the three Triad windows (parent, current, preview)
@@ -684,6 +714,7 @@ function M.create_layout()
 
   -- Parent Window
   state.parent_win_id = vim.api.nvim_open_win(state.parent_buf_id, true, win_opts)
+  vim.api.nvim_win_set_config(state.parent_win_id, { focusable = false })
   vim.api.nvim_win_set_option(state.parent_win_id, "winfixwidth", true)
   vim.api.nvim_win_set_option(state.parent_win_id, "winhighlight", "Normal:Normal,FloatBorder:Normal")
 
@@ -697,6 +728,7 @@ function M.create_layout()
   -- Preview Window
   win_opts.col = col + parent_width + current_width + 4 -- +4 for two previous windows borders
   state.preview_win_id = vim.api.nvim_open_win(state.preview_buf_id, true, win_opts)
+  vim.api.nvim_win_set_config(state.preview_win_id, { focusable = false })
   vim.api.nvim_win_set_width(state.preview_win_id, preview_width)
   vim.api.nvim_win_set_option(state.preview_win_id, "winfixwidth", true)
   vim.api.nvim_win_set_option(state.preview_win_id, "winhighlight", "Normal:Normal,FloatBorder:Normal")

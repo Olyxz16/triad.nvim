@@ -10,7 +10,7 @@ local state = require("triad.state") -- Require triad.state instead of triad.ini
 --- @return table|nil files A list of file/directory names, or nil if an error occurred.
 --- @return string|nil err An error message if an error occurred.
 function M.read_dir(path)
-  local files = {}
+  local entries_list = {}
   local handle, err = vim.uv.fs_opendir(path)
   if err then
     return nil, "Failed to open directory: " .. err
@@ -28,14 +28,25 @@ function M.read_dir(path)
         if state.config and not state.config.show_hidden and name:sub(1,1) == "." then
           -- Skip hidden files if show_hidden is false
         else
-          table.insert(files, name)
+          table.insert(entries_list, entry)
         end
       end
     end
   end
 
   vim.uv.fs_closedir(handle)
-  table.sort(files)
+
+  table.sort(entries_list, function(a, b)
+    if a.type == 'directory' and b.type ~= 'directory' then return true end
+    if a.type ~= 'directory' and b.type == 'directory' then return false end
+    return a.name < b.name
+  end)
+
+  local files = {}
+  for _, entry in ipairs(entries_list) do
+    table.insert(files, entry.name)
+  end
+
   return files
 end
 

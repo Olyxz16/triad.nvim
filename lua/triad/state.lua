@@ -26,6 +26,7 @@ M.original_file_data = {}
 M.git_status_data = {}
 M.config = nil
 M.dir_cursor_history = {} -- Maps directory path to last selected filename
+M.is_edit_mode = false
 
 function M.set_current_dir(path)
   M.current_dir = path

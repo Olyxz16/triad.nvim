@@ -36,9 +36,11 @@ describe("Triad Cursor Memory", function()
     temp_dir:joinpath("a_1.txt"):touch()
     temp_dir:joinpath("a_2.txt"):touch()
     temp_dir:joinpath("a_3.txt"):touch()
+    -- Create a directory that comes BEFORE 'subdir' alphabetically to ensure 'subdir' is not first.
+    temp_dir:joinpath("aa_dir"):mkdir() 
     sub_dir_path = temp_dir:joinpath(sub_dir_name)
     sub_dir_path:mkdir()
-    -- 'subdir' should be 4th (alphabetical: a_1, a_2, a_3, subdir)
+    -- 'subdir' should be 2nd (aa_dir, subdir, ...files...)
     
     -- Populate subdir with just ONE file so cursor is forced to line 1
     sub_dir_path:joinpath("inner.txt"):touch()
