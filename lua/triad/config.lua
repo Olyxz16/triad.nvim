@@ -26,6 +26,7 @@ config = {
     untracked = '',
     ignored = '',
     renamed = '➜',
+    conflict = '',
     -- Future: colors
   },
   devicons_enabled = true,

@@ -129,13 +129,25 @@ function M.render_current_pane()
     local git_status = state.git_status_data[file_name]
     if git_status then
       local git_icon = ""
-      if git_status == "M " then git_icon = state.config.git_icons.modified
-      elseif git_status == "A " then git_icon = state.config.git_icons.added
-      elseif git_status == "D " then git_icon = state.config.git_icons.deleted
-      elseif git_status == "?? " then git_icon = state.config.git_icons.untracked
-      elseif git_status == "!! " then git_icon = state.config.git_icons.ignored
-      elseif git_status:sub(1,1) == "R" then git_icon = state.config.git_icons.renamed -- Renamed files start with 'R'
+      local s1 = git_status:sub(1, 1)
+      local s2 = git_status:sub(2, 2)
+      
+      if s1 == "U" or s2 == "U" or (s1 == "A" and s2 == "A") or (s1 == "D" and s2 == "D") then
+         git_icon = state.config.git_icons.conflict
+      elseif s1 == "?" then
+         git_icon = state.config.git_icons.untracked
+      elseif s1 == "!" then
+         git_icon = state.config.git_icons.ignored
+      elseif s1 == "M" or s2 == "M" then
+         git_icon = state.config.git_icons.modified
+      elseif s1 == "A" then
+         git_icon = state.config.git_icons.added
+      elseif s1 == "R" then
+         git_icon = state.config.git_icons.renamed
+      elseif s1 == "D" then
+         git_icon = state.config.git_icons.deleted
       end
+      
       if git_icon ~= "" then
         display_name = git_icon .. " " .. display_name
       end
