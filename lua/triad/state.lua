@@ -25,6 +25,7 @@ M.file_data = {} -- Stores data about files in the current pane for diffing/rena
 M.original_file_data = {}
 M.git_status_data = {}
 M.config = nil
+M.dir_cursor_history = {} -- Maps directory path to last selected filename
 
 function M.set_current_dir(path)
   M.current_dir = path

@@ -151,6 +151,44 @@ local is_closing = false
 -- Define the highlight group for the selected line
 vim.api.nvim_set_hl(0, "TriadSelectedLine", { link = "Visual" }) -- Link to 'Visual' by default
 
+--- Gets the filename from a display line (stripping icons).
+--- @param line string The display line.
+--- @return string filename The filename.
+local function get_filename_from_line(line)
+  if not line then return "" end
+  return line:match("[^%s]*%s?(.*)") or line
+end
+
+--- Saves the current cursor position for the current directory.
+local function save_cursor_position()
+  if not state.current_dir or not state.current_buf_id or not vim.api.nvim_buf_is_valid(state.current_buf_id) then return end
+  local cursor = vim.api.nvim_win_get_cursor(state.current_win_id)
+  local row = cursor[1]
+  local line = vim.api.nvim_buf_get_lines(state.current_buf_id, row - 1, row, false)[1]
+  local filename = get_filename_from_line(line)
+  if filename and filename ~= "" then
+    state.dir_cursor_history[state.current_dir] = filename
+  end
+end
+
+--- Restores the cursor position for the current directory.
+local function restore_cursor_position()
+  if not state.current_dir or not state.current_buf_id or not vim.api.nvim_buf_is_valid(state.current_buf_id) then return end
+  local target_filename = state.dir_cursor_history[state.current_dir]
+  if not target_filename then return end
+
+  local lines = vim.api.nvim_buf_get_lines(state.current_buf_id, 0, -1, false)
+  for i, line in ipairs(lines) do
+    local fname = get_filename_from_line(line)
+    if fname == target_filename then
+       pcall(vim.api.nvim_win_set_cursor, state.current_win_id, {i, 0})
+       -- Force redraw/scroll
+       vim.cmd("normal! zz")
+       return
+    end
+  end
+end
+
 --- Helper to set/clear line highlight
 --- @param buf_id number
 --- @param line_num number|nil 1-based line number to highlight, or nil to clear all.
@@ -322,10 +360,25 @@ function M.enable_nav_mode()
 
   -- Parent Directory
   local go_parent = function()
+    save_cursor_position()
+    
+    local old_dir = state.current_dir
     local parent_path = Path:new(state.current_dir):parent():__tostring()
+    
+    -- When going UP, we want to land on the directory we just left.
+    if old_dir and parent_path then
+       local target = Path:new(old_dir):make_relative(parent_path)
+       if target == old_dir then -- failed to make relative
+          target = vim.fn.fnamemodify(old_dir, ":t")
+       end
+       state.dir_cursor_history[parent_path] = target
+    end
+
     state.set_current_dir(parent_path)
     M.render_parent_pane()
     M.render_current_pane()
+    restore_cursor_position()
+
     require("triad.git").fetch_git_status()
     M.enable_nav_mode() -- Ensure we stay in nav mode (re-applies settings/maps if lost)
   end
@@ -343,9 +396,11 @@ function M.enable_nav_mode()
     
     local stat = vim.uv.fs_stat(full_path)
     if stat and stat.type == "directory" then
+      save_cursor_position()
       state.set_current_dir(full_path)
       M.render_parent_pane()
       M.render_current_pane()
+      restore_cursor_position()
       require("triad.git").fetch_git_status()
       M.enable_nav_mode()
     end
@@ -363,9 +418,11 @@ function M.enable_nav_mode()
     
     local stat = vim.uv.fs_stat(full_path)
     if stat and stat.type == "directory" then
+      save_cursor_position()
       state.set_current_dir(full_path)
       M.render_parent_pane()
       M.render_current_pane()
+      restore_cursor_position()
       require("triad.git").fetch_git_status()
       M.enable_nav_mode()
     elseif stat and stat.type == "file" then
