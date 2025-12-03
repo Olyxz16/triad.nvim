@@ -7,8 +7,11 @@ local Path = require("plenary.path")
 local function get_filename_from_display_line(line)
   if not line then return nil end
   -- Match pattern used in ui.lua: icon + space + filename
-  -- If no icon/space, it might just capture the whole line or fail, but the UI always adds at least "- "
-  return line:match("[^%s]*%s?(.*)")
+  local name = line:match("[^%s]*%s?(.*)")
+  if name and name:sub(-1) == "/" then
+    name = name:sub(1, -2)
+  end
+  return name
 end
 
 describe("Triad Cursor Memory", function()

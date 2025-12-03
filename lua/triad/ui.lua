@@ -88,7 +88,9 @@ function M.render_parent_pane()
     local is_dir = stat and stat.type == "directory"
 
     local icon = get_devicon(file_name, is_dir)
-    table.insert(lines_to_render, icon .. " " .. file_name)
+    local display_name = icon .. " " .. file_name
+    if is_dir then display_name = display_name .. "/" end
+    table.insert(lines_to_render, display_name)
   end
   render_buffer(state.parent_buf_id, lines_to_render)
 end
@@ -118,6 +120,10 @@ function M.render_current_pane()
     local dev_icon = get_devicon(file_name, is_dir)
     if dev_icon == "" then dev_icon = "-" end
     display_name = dev_icon .. " " .. display_name
+
+    if is_dir then
+        display_name = display_name .. "/"
+    end
 
     -- Prepend git status icon
     local git_status = state.git_status_data[file_name]
@@ -156,7 +162,12 @@ vim.api.nvim_set_hl(0, "TriadSelectedLine", { link = "Visual" }) -- Link to 'Vis
 --- @return string filename The filename.
 local function get_filename_from_line(line)
   if not line then return "" end
-  return line:match("[^%s]*%s?(.*)") or line
+  local name = line:match("[^%s]*%s?(.*)") or line
+  -- Strip trailing slash if present
+  if name:sub(-1) == "/" then
+    name = name:sub(1, -2)
+  end
+  return name
 end
 
 --- Saves the current cursor position for the current directory.
@@ -203,42 +214,177 @@ end
 
 --- Handles BufWriteCmd for the current pane to manage file system changes.
 local function handle_buf_write()
-  -- ... (no change needed here usually, assuming schedule handles valid checks if render called)
-  -- Actually, handle_buf_write calls render_current_pane in schedule, which now has checks.
+  -- Read current lines from buffer
   local current_lines = vim.api.nvim_buf_get_lines(state.current_buf_id, 0, -1, false)
 
-  local new_files = {}
-  for _, line in ipairs(current_lines) do
-    new_files[line] = true
+  -- 1. Identify Original Files (State) FIRST to help with parsing
+  local original_names_set = {}
+  local original_files_list = {} -- indexed by line number
+  local max_orig_line = 0
+  for line_num, full_path in pairs(state.original_file_data) do
+    local name = vim.fn.fnamemodify(full_path, ":t")
+    original_names_set[name] = true
+    original_files_list[line_num] = { name = name, full_path = full_path }
+    if line_num > max_orig_line then max_orig_line = line_num end
   end
 
-  -- Detect deletions and renames
-  for line_num, original_full_path in pairs(state.original_file_data) do
-    local original_file_name = Path:new(original_full_path).name
-    local new_file_name_with_icons = current_lines[line_num]
-    local new_file_name = new_file_name_with_icons:match("[^%s]*%s?(.*)") -- Remove leading icon and space
+  -- 2. Parse current lines
+  local current_files = {}
+  for i, line in ipairs(current_lines) do
+    local icon_part, name_part = line:match("^([^%s]*)%s?(.*)")
+    local effective_name = line
+    local raw_name = line -- for trailing slash check
 
-    if not new_file_name_with_icons then
-      -- Line was deleted
-      vim.schedule(function()
-        local ok, err = fs.unlink(original_full_path)
-        if not ok then
-          vim.notify("Triad: Failed to delete " .. original_file_name .. ": " .. err, vim.log.levels.ERROR)
+    if name_part and name_part ~= "" then
+       -- Potential split. Check heuristics.
+       -- If name_part is in original set, it's likely the file (Icon Name).
+       -- Strip trailing slash from name_part for check
+       local clean_name_part = name_part:gsub("/$", "")
+       
+       if original_names_set[clean_name_part] then
+          effective_name = clean_name_part
+          raw_name = name_part
+       elseif icon_part == "-" or icon_part:match("[^%z\1-\127]") then 
+          -- Icon is "-" or Non-ASCII -> Treat as icon.
+          effective_name = clean_name_part
+          raw_name = name_part
+       else
+          -- Icon is ASCII and not "-" (e.g. "new file") -> Treat whole line as name.
+          effective_name = line:gsub("/$", "")
+          raw_name = line
+       end
+    else
+       -- No split (one word), treat as name
+       effective_name = line:gsub("/$", "")
+       raw_name = line
+    end
+    
+    current_files[i] = { raw = raw_name, name = effective_name }
+  end
+
+  -- 3. Determine Actions
+  --    We use a "pending" set to track processed items.
+  local processed_current = {} -- index -> bool
+  local processed_original = {} -- index -> bool
+
+  -- A. Identify Unchanged Files (Keep)
+  --    If a file exists in both original (anywhere) and current (anywhere), it's kept.
+  --    We only mark them processed if they match exactly or we just want to ignore them.
+  --    Actually, we should iterate current lines. If name exists in original set, it's a Keep.
+  --    BUT: If we rename A -> B, and B already exists? (Overwrite?)
+  --    Let's stick to Simple Logic:
+  --    If current[i] exists in original_names_set -> It is NOT a creation. It is a Keep.
+  --    (We don't handle moving reordering on disk, so position doesn't matter for FS, just display).
+  
+  --    Wait, if I rename "foo" to "bar", "foo" is gone, "bar" is new.
+  --    If I simply check "is bar in original", answer is No. So "bar" is candidate for Create.
+  --    If I check "is foo in current", answer is No. So "foo" is candidate for Delete.
+  
+  --    Heuristic for Rename: If original[i] is candidate for delete AND current[i] is candidate for create -> Rename.
+  
+  -- Mark Keeps
+  for i, file_info in ipairs(current_files) do
+    if original_names_set[file_info.name] then
+        processed_current[i] = true
+        -- We also need to mark the original instance as processed.
+        -- Since names are unique in a dir, we can find it.
+        for orig_i, orig_data in pairs(original_files_list) do
+            if orig_data.name == file_info.name then
+                processed_original[orig_i] = true
+                break
+            end
         end
-      end)
-    elseif new_file_name ~= original_file_name then
-      -- Line was renamed
-      vim.schedule(function()
-        local new_full_path = Path:new(state.current_dir, new_file_name):__tostring()
-        local ok, err = fs.rename(original_full_path, new_full_path)
-        if not ok then
-          vim.notify("Triad: Failed to rename " .. original_file_name .. " to " .. new_file_name .. ": " .. err, vim.log.levels.ERROR)
-        end
-      end)
     end
   end
 
-  -- For now, just re-render to reflect changes made by deletes/renames
+  -- Process Remaining Items
+  -- Iterate by line index to catch "Edit Line = Rename" heuristic
+  local max_line = math.max(#current_files, max_orig_line)
+  
+  for i = 1, max_line do
+    local curr = current_files[i]
+    local orig = original_files_list[i]
+    
+    local is_curr_processed = processed_current[i]
+    local is_orig_processed = processed_original[i]
+
+    if curr and not is_curr_processed and orig and not is_orig_processed then
+        -- Case: Rename (Edit in place)
+        vim.schedule(function()
+            local new_full_path = Path:new(state.current_dir, curr.name):__tostring()
+            local ok, err = fs.rename(orig.full_path, new_full_path)
+            if not ok then
+               vim.notify("Triad: Failed to rename " .. orig.name .. " to " .. curr.name .. ": " .. err, vim.log.levels.ERROR)
+            end
+        end)
+        -- Treat as processed
+        processed_current[i] = true
+        processed_original[i] = true
+
+    elseif curr and not is_curr_processed then
+        -- Case: Create (New line inserted, or mismatch)
+        -- Check if directory
+        local is_dir_creation = curr.raw:sub(-1) == "/"
+        vim.schedule(function()
+            local new_full_path = Path:new(state.current_dir, curr.name):__tostring()
+            if is_dir_creation then
+               local ok, err = fs.mkdir(new_full_path)
+               if not ok then vim.notify("Triad: Failed to create dir " .. curr.name .. ": " .. err, vim.log.levels.ERROR) end
+            else
+               local ok, err = fs.touch(new_full_path)
+               if not ok then vim.notify("Triad: Failed to create file " .. curr.name .. ": " .. err, vim.log.levels.ERROR) end
+            end
+        end)
+        processed_current[i] = true
+
+    elseif orig and not is_orig_processed then
+        -- Case: Delete (Line removed, or mismatch)
+        -- But wait! If we inserted a line at top, everything shifts.
+        -- Original[2] might be Current[3].
+        -- Original[2] matches Current[3] (Keep). So Original[2] is processed.
+        -- So this block only runs if the file is GENUINELY missing from current list.
+        -- But my "Mark Keeps" logic above handled finding it anywhere.
+        -- So if we are here, orig is definitely not in current. -> Delete.
+        vim.schedule(function()
+            local ok, err = fs.unlink(orig.full_path)
+            if not ok then
+                -- Check if it was a directory not empty? 
+                -- unlink usually fails on non-empty dirs.
+                -- Users might expect recursive delete? standard `rm` behavior?
+                -- For safety, let's warn.
+                vim.notify("Triad: Failed to delete " .. orig.name .. ": " .. err, vim.log.levels.ERROR)
+            end
+        end)
+        processed_original[i] = true
+    end
+  end
+  
+  -- Catch any stragglers if loop limits were off (unlikely with max_line)
+  -- Actually, checking "Delete" for high indices:
+  for line_num, orig_data in pairs(original_files_list) do
+      if not processed_original[line_num] then
+         vim.schedule(function()
+            fs.unlink(orig_data.full_path)
+         end)
+      end
+  end
+  
+  -- Catch any stragglers for "Create" (if appended at end)
+  for i, curr in ipairs(current_files) do
+      if not processed_current[i] then
+        local is_dir_creation = curr.raw:sub(-1) == "/"
+        vim.schedule(function()
+            local new_full_path = Path:new(state.current_dir, curr.name):__tostring()
+            if is_dir_creation then
+               fs.mkdir(new_full_path)
+            else
+               fs.touch(new_full_path)
+            end
+        end)
+      end
+  end
+
+  -- Re-render
   vim.schedule(function()
     M.render_current_pane()
     M.render_parent_pane()

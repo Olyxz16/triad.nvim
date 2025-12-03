@@ -66,4 +66,32 @@ function M.unlink(path)
   end
 end
 
+--- Creates a directory.
+--- @param path string The path to the directory.
+--- @return boolean success True if successful, false otherwise.
+--- @return string|nil err An error message if an error occurred.
+function M.mkdir(path)
+  -- 493 is 0755 in octal
+  local ok, err = vim.uv.fs_mkdir(path, 493)
+  if err then
+    return false, "Failed to create directory: " .. err
+  else
+    return true
+  end
+end
+
+--- Creates an empty file.
+--- @param path string The path to the file.
+--- @return boolean success True if successful, false otherwise.
+--- @return string|nil err An error message if an error occurred.
+function M.touch(path)
+  -- 420 is 0644 in octal, "w" creates/truncates
+  local fd, err = vim.uv.fs_open(path, "w", 420)
+  if err then
+    return false, "Failed to create file: " .. err
+  end
+  vim.uv.fs_close(fd)
+  return true
+end
+
 return M
