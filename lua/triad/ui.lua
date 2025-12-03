@@ -126,7 +126,11 @@ function M.render_current_pane()
     end
 
     -- Prepend git status icon
-    local git_status = state.git_status_data[file_name]
+    -- Ensure full_path has no trailing slash for lookup, matching git.lua storage
+    local lookup_path = full_path
+    if lookup_path:sub(-1) == "/" then lookup_path = lookup_path:sub(1, -2) end
+    
+    local git_status = state.git_status_data[lookup_path]
     if git_status then
       local git_icon = ""
       local s1 = git_status:sub(1, 1)

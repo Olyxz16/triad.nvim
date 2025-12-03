@@ -14,7 +14,7 @@ describe("Git Integration", function()
     state.current_buf_id = vim.api.nvim_create_buf(false, true) -- Mock buffer for render calls
     -- Initialize config to prevent crashes in ui.lua
     require("triad").setup() 
-    state.config = require("triad.config") -- Fallback if setup doesn't set it immediately or correctly in test env
+    state.config = require("triad.config")
     
     -- Init git repo
     Job:new({ command = "git", args = { "init" }, cwd = cwd }):sync()
@@ -38,9 +38,9 @@ describe("Git Integration", function()
     
     git.fetch_git_status()
     
-    vim.wait(2000, function() return state.git_status_data["untracked.txt"] ~= nil end)
+    vim.wait(2000, function() return state.git_status_data[file] ~= nil end)
     
-    assert.are.same("??", state.git_status_data["untracked.txt"])
+    assert.are.same("??", state.git_status_data[file])
   end)
 
   it("detects added files (A )", function()
@@ -50,9 +50,9 @@ describe("Git Integration", function()
     
     git.fetch_git_status()
     
-    vim.wait(2000, function() return state.git_status_data["added.txt"] ~= nil end)
+    vim.wait(2000, function() return state.git_status_data[file] ~= nil end)
     
-    assert.are.same("A ", state.git_status_data["added.txt"])
+    assert.are.same("A ", state.git_status_data[file])
   end)
 
   it("detects modified files ( M)", function()
@@ -65,19 +65,12 @@ describe("Git Integration", function()
     
     git.fetch_git_status()
     
-    vim.wait(2000, function() return state.git_status_data["modified.txt"] ~= nil end)
+    vim.wait(2000, function() return state.git_status_data[file] ~= nil end)
     
-    assert.are.same(" M", state.git_status_data["modified.txt"])
+    assert.are.same(" M", state.git_status_data[file])
   end)
 
     it("detects conflict files (UU)", function()
-    -- To create a conflict:
-    -- 1. Create file on main
-    -- 2. Branch to feature
-    -- 3. Modify file on feature & commit
-    -- 4. Checkout main, modify file & commit
-    -- 5. Merge feature -> Conflict
-    
     local file = cwd .. "/conflict.txt"
     vim.fn.writefile({"base"}, file)
     Job:new({ command = "git", args = { "add", "." }, cwd = cwd }):sync()
@@ -91,16 +84,16 @@ describe("Git Integration", function()
     vim.fn.writefile({"master"}, file)
     Job:new({ command = "git", args = { "commit", "-am", "master" }, cwd = cwd }):sync()
     
-    -- Merge returns exit code 1 on conflict, so don't panic
+    -- Merge returns exit code 1 on conflict
     pcall(function()
         Job:new({ command = "git", args = { "merge", "feature" }, cwd = cwd }):sync()
     end)
 
     git.fetch_git_status()
     
-    vim.wait(2000, function() return state.git_status_data["conflict.txt"] ~= nil end)
+    vim.wait(2000, function() return state.git_status_data[file] ~= nil end)
     
-    assert.are.same("UU", state.git_status_data["conflict.txt"])
+    assert.are.same("UU", state.git_status_data[file])
   end)
 
   it("renders icons in the buffer", function()
@@ -112,7 +105,7 @@ describe("Git Integration", function()
     
     git.fetch_git_status()
     
-    vim.wait(2000, function() return state.git_status_data["modified.txt"] ~= nil end)
+    vim.wait(2000, function() return state.git_status_data[file] ~= nil end)
     
     -- Wait a bit more for render to happen (it's scheduled)
     vim.wait(100) 
@@ -121,8 +114,6 @@ describe("Git Integration", function()
     local found = false
     local modified_icon = state.config.git_icons.modified
     for _, line in ipairs(lines) do
-       -- Check if line contains icon and filename
-       -- Note: The line also contains devicon.
        if line:find(modified_icon, 1, true) and line:find("modified.txt", 1, true) then
          found = true
          break
