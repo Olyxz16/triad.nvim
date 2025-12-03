@@ -20,7 +20,7 @@ Like [yazi](https://github.com/mikavilpas/yazi.nvim), but ⚡*slower*⚡.
 
 ```lua
 {
-    "triad-nvim/triad.nvim",
+    "Olyxz16/triad.nvim",
     dependencies = {
         "nvim-lua/plenary.nvim",
         "nvim-tree/nvim-web-devicons", -- Optional, for icons
