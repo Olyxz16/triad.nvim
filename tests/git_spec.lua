@@ -119,7 +119,7 @@ describe("Git Integration", function()
        -- mark = { id, row, col, details }
        -- details.virt_text = { { "text", "hl" } }
        local virt_text = mark[4].virt_text
-       if virt_text and virt_text[2] and virt_text[2][1] == modified_icon then -- virt_text is now {{" ", "Normal"}, {icon, hl}}
+       if virt_text and virt_text[1] and virt_text[1][1] == modified_icon then
            found = true
            break
        end

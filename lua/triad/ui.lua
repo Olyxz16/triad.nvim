@@ -178,8 +178,8 @@ function M.render_current_pane()
   vim.api.nvim_buf_clear_namespace(state.current_buf_id, M.git_ns_id, 0, -1)
   for _, mark in ipairs(git_extmarks) do
       vim.api.nvim_buf_set_extmark(state.current_buf_id, M.git_ns_id, mark[1], 0, {
-          virt_text = { { " ", "Normal" }, { mark[2], mark[3] } }, -- Add a space for padding
-          virt_text_pos = "eol", -- Place at end of line
+          virt_text = { { mark[2], mark[3] } },
+          virt_text_pos = "right_align",
       })
   end
 end
