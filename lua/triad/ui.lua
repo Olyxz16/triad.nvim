@@ -108,6 +108,8 @@ function M.render_current_pane()
 
   state.reset_original_file_data()
   local lines_to_render = {}
+  local git_extmarks = {} -- Stores {line_idx, icon, hl_group}
+
   for i, file_name in ipairs(files) do
     state.original_file_data[i] = Path:new(state.current_dir, file_name):__tostring()
     local display_name = file_name
@@ -125,7 +127,7 @@ function M.render_current_pane()
         display_name = display_name .. "/"
     end
 
-    -- Prepend git status icon
+    -- Git status icon (Extmarks)
     -- Ensure full_path has no trailing slash for lookup, matching git.lua storage
     local lookup_path = full_path
     if lookup_path:sub(-1) == "/" then lookup_path = lookup_path:sub(1, -2) end
@@ -133,33 +135,50 @@ function M.render_current_pane()
     local git_status = state.git_status_data[lookup_path]
     if git_status then
       local git_icon = ""
+      local git_hl = "Normal"
       local s1 = git_status:sub(1, 1)
       local s2 = git_status:sub(2, 2)
       
       if s1 == "U" or s2 == "U" or (s1 == "A" and s2 == "A") or (s1 == "D" and s2 == "D") then
          git_icon = state.config.git_icons.conflict
+         git_hl = "TriadGitConflict"
       elseif s1 == "?" then
          git_icon = state.config.git_icons.untracked
+         git_hl = "TriadGitUntracked"
       elseif s1 == "!" then
          git_icon = state.config.git_icons.ignored
+         git_hl = "Comment"
       elseif s1 == "M" or s2 == "M" then
          git_icon = state.config.git_icons.modified
+         git_hl = "TriadGitModified"
       elseif s1 == "A" then
          git_icon = state.config.git_icons.added
+         git_hl = "TriadGitAdded"
       elseif s1 == "R" then
          git_icon = state.config.git_icons.renamed
+         git_hl = "TriadGitModified"
       elseif s1 == "D" then
          git_icon = state.config.git_icons.deleted
+         git_hl = "TriadGitDeleted"
       end
       
       if git_icon ~= "" then
-        display_name = git_icon .. " " .. display_name
+        table.insert(git_extmarks, { i - 1, git_icon, git_hl })
       end
     end
     table.insert(lines_to_render, display_name)
   end
 
   render_buffer(state.current_buf_id, lines_to_render)
+  
+  -- Apply Git Extmarks
+  vim.api.nvim_buf_clear_namespace(state.current_buf_id, M.git_ns_id, 0, -1)
+  for _, mark in ipairs(git_extmarks) do
+      vim.api.nvim_buf_set_extmark(state.current_buf_id, M.git_ns_id, mark[1], 0, {
+          virt_text = { { mark[2], mark[3] } },
+          virt_text_pos = "right_align",
+      })
+  end
 end
 
 local oil_augroup_id = vim.api.nvim_create_augroup("TriadOilEngine", { clear = true })
@@ -168,10 +187,17 @@ local autoclose_augroup_id = vim.api.nvim_create_augroup("TriadAutoClose", { cle
 local autohighlight_augroup_id = vim.api.nvim_create_augroup("TriadAutoHighlight", { clear = true }) -- New augroup for highlight
 
 M.highlight_ns_id = vim.api.nvim_create_namespace("TriadHighlights") -- New namespace for highlight
+M.git_ns_id = vim.api.nvim_create_namespace("TriadGitIcons") -- Namespace for git extmarks
+
 local is_closing = false
 
 -- Define the highlight group for the selected line
 vim.api.nvim_set_hl(0, "TriadSelectedLine", { link = "Visual" }) -- Link to 'Visual' by default
+vim.api.nvim_set_hl(0, "TriadGitModified", { link = "GitSignsChange", default = true })
+vim.api.nvim_set_hl(0, "TriadGitAdded", { link = "GitSignsAdd", default = true })
+vim.api.nvim_set_hl(0, "TriadGitDeleted", { link = "GitSignsDelete", default = true })
+vim.api.nvim_set_hl(0, "TriadGitConflict", { link = "DiagnosticError", default = true })
+vim.api.nvim_set_hl(0, "TriadGitUntracked", { link = "DiagnosticWarn", default = true })
 
 --- Gets the filename from a display line (stripping icons).
 --- @param line string The display line.

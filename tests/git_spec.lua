@@ -96,7 +96,7 @@ describe("Git Integration", function()
     assert.are.same("UU", state.git_status_data[file])
   end)
 
-  it("renders icons in the buffer", function()
+  it("renders icons in the buffer using extmarks", function()
     local file = cwd .. "/modified.txt"
     vim.fn.writefile({"v1"}, file)
     Job:new({ command = "git", args = { "add", "." }, cwd = cwd }):sync()
@@ -110,15 +110,21 @@ describe("Git Integration", function()
     -- Wait a bit more for render to happen (it's scheduled)
     vim.wait(100) 
     
-    local lines = vim.api.nvim_buf_get_lines(state.current_buf_id, 0, -1, false)
+    -- Check Extmarks
+    local extmarks = vim.api.nvim_buf_get_extmarks(state.current_buf_id, ui.git_ns_id, 0, -1, { details = true })
     local found = false
     local modified_icon = state.config.git_icons.modified
-    for _, line in ipairs(lines) do
-       if line:find(modified_icon, 1, true) and line:find("modified.txt", 1, true) then
-         found = true
-         break
+    
+    for _, mark in ipairs(extmarks) do
+       -- mark = { id, row, col, details }
+       -- details.virt_text = { { "text", "hl" } }
+       local virt_text = mark[4].virt_text
+       if virt_text and virt_text[1] and virt_text[1][1] == modified_icon then
+           found = true
+           break
        end
     end
-    assert.is_true(found, "Did not find modified icon in buffer lines: " .. vim.inspect(lines))
+
+    assert.is_true(found, "Did not find modified icon in buffer extmarks")
   end)
 end)
