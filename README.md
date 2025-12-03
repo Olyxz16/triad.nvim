@@ -10,14 +10,7 @@ Like [yazi](https://github.com/mikavilpas/yazi.nvim), but ⚡*slower*⚡.
 
 *   **Miller Columns:** Navigate with a Parent, Current, and Preview pane.
 *   **Buffer-Based Editing:** Rename, create, and delete files by simply editing the file list buffer.
-*   **Git Integration:** Async git status updates with support for:
-    *   Modified (``)
-    *   Added (``)
-    *   Deleted (``)
-    *   Untracked (``)
-    *   Ignored (``)
-    *   Renamed (`➜`)
-    *   Conflict (``)
+*   **Git Integration:** Async git status updates.
 *   **Icons:** Integration with `nvim-web-devicons`.
 *   **Zero Binaries:** Pure Lua implementation.
 
@@ -83,17 +76,6 @@ Press `e` (or `i`, `a`, etc.) to enter **Edit Mode**. The buffer becomes modifia
 1.  Press `<Esc>` to return to Normal mode.
 2.  Triad will prompt you to confirm the changes (Create, Rename, Delete).
 3.  Select `Yes` to apply or `No` to discard.
-
-## Git Integration
-
-Triad automatically fetches git status for the current directory.
-
-*   **Modified:** `` (Yellow)
-*   **Added:** `` (Green)
-*   **Deleted:** `` (Red)
-*   **Untracked:** `` (Orange)
-*   **Conflict:** `` (Red/Error)
-*   **Ignored:** `` (Grey/Comment)
 
 ## Configuration
 
