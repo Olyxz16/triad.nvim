@@ -565,6 +565,7 @@ function M.enable_nav_mode()
   end
   vim.keymap.set("n", "h", go_parent, opts)
   vim.keymap.set("n", "-", go_parent, opts)
+  vim.keymap.set("n", "<Left>", go_parent, opts)
 
   -- Enter Directory (l key)
   local enter_dir_only = function()
@@ -587,6 +588,7 @@ function M.enable_nav_mode()
     end
   end
   vim.keymap.set("n", "l", enter_dir_only, opts)
+  vim.keymap.set("n", "<Right>", enter_dir_only, opts)
 
   -- Open / Enter (CR key)
   local open_entry = function()
@@ -620,6 +622,8 @@ function M.enable_nav_mode()
   -- Default movement: j, k
   vim.keymap.set("n", "j", "j", opts)
   vim.keymap.set("n", "k", "k", opts)
+  vim.keymap.set("n", "<Down>", "j", opts)
+  vim.keymap.set("n", "<Up>", "k", opts)
 
   -- Switch to Edit Mode
   vim.keymap.set("n", "e", function() M.enable_edit_mode() end, opts)
