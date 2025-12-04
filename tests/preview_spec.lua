@@ -73,4 +73,32 @@ describe("Triad Preview", function()
     assert.is_true(#preview_lines >= 1, "Preview buffer is empty")
     assert.equals(test_content[1], preview_lines[1])
   end)
+
+  it("renders directory content with visual indicators (slashes)", function()
+    vim.api.nvim_set_current_dir(temp_dir:absolute())
+    triad.open()
+    vim.wait(50)
+
+    -- Create a nested structure
+    local sub_dir = temp_dir:joinpath("nested_dir")
+    sub_dir:mkdir()
+    sub_dir:joinpath("inner_file.txt"):touch()
+    sub_dir:joinpath("inner_folder"):mkdir()
+
+    -- Preview the subdirectory
+    require("triad.preview").update_preview(sub_dir:absolute())
+    vim.wait(200)
+
+    local lines = vim.api.nvim_buf_get_lines(state.preview_buf_id, 0, -1, false)
+    
+    -- We expect "inner_folder/" and "inner_file.txt" (possibly with icons)
+    -- Just checking for the trailing slash on the folder is enough to verify the logic
+    local folder_found = false
+    for _, line in ipairs(lines) do
+      if line:match("inner_folder/") then
+        folder_found = true
+      end
+    end
+    assert.is_true(folder_found, "Directory in preview should have trailing slash")
+  end)
 end)

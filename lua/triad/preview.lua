@@ -9,6 +9,35 @@ local Path = require("plenary.path")
 
 local DEBOUNCE_TIME_MS = 100
 local timer = nil
+local devicons = nil
+
+--- Initializes devicons if enabled in the config.
+local function setup_devicons()
+  if devicons then return end -- Already loaded
+  if state.config and state.config.devicons_enabled then
+    local ok, lib = pcall(require, "nvim-web-devicons")
+    if ok then
+      devicons = lib
+    end
+  end
+end
+
+--- Gets the devicon for a given filename.
+--- @param filename string The name of the file.
+--- @param is_dir boolean Whether the file is a directory.
+--- @return string icon The devicon.
+local function get_devicon(filename, is_dir)
+  setup_devicons()
+  if devicons then
+    if is_dir then
+      return ""
+    end
+    local extension = filename:match("^.+%.(.+)$")
+    local icon = devicons.get_icon(filename, extension, { default = true })
+    return icon or ""
+  end
+  return ""
+end
 
 --- Determines the type of a file/path.
 --- @param path string The path to check.
@@ -36,7 +65,7 @@ function M.get_file_type(path)
       return "error", read_err
     end
 
-    if chunk:find("\0") then
+    if chunk and chunk:find("\0") then
       return "binary"
     else
       return "text"
@@ -94,7 +123,20 @@ function M.update_preview(file_path)
       if read_err then
         render_preview_buffer({ "Error reading directory: " .. read_err })
       else
-        render_preview_buffer(files)
+        local lines = {}
+        for _, name in ipairs(files) do
+           local full_path = Path:new(file_path, name):__tostring()
+           local stat = vim.uv.fs_stat(full_path)
+           local is_dir = stat and stat.type == "directory"
+           
+           local icon = get_devicon(name, is_dir)
+           if icon == "" then icon = "-" end -- Default placeholder if no icon
+           
+           local display = icon .. " " .. name
+           if is_dir then display = display .. "/" end
+           table.insert(lines, display)
+        end
+        render_preview_buffer(lines)
       end
     elseif file_type == "text" then
       local lines, read_err = M.load_file_content(file_path, 100) -- Read first 100 lines
