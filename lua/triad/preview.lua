@@ -22,21 +22,24 @@ local function setup_devicons()
   end
 end
 
+local icon_ns_id = vim.api.nvim_create_namespace("TriadPreviewIcons")
+
 --- Gets the devicon for a given filename.
 --- @param filename string The name of the file.
 --- @param is_dir boolean Whether the file is a directory.
 --- @return string icon The devicon.
+--- @return string highlight The highlight group for the icon.
 local function get_devicon(filename, is_dir)
   setup_devicons()
   if devicons then
     if is_dir then
-      return ""
+      return "", "Directory"
     end
     local extension = filename:match("^.+%.(.+)$")
-    local icon = devicons.get_icon(filename, extension, { default = true })
-    return icon or ""
+    local icon, hl = devicons.get_icon(filename, extension, { default = true })
+    return icon or "", hl or ""
   end
-  return ""
+  return "", ""
 end
 
 --- Determines the type of a file/path.
@@ -124,19 +127,53 @@ function M.update_preview(file_path)
         render_preview_buffer({ "Error reading directory: " .. read_err })
       else
         local lines = {}
+        local highlights = {}
+        
         for _, name in ipairs(files) do
            local full_path = Path:new(file_path, name):__tostring()
            local stat = vim.uv.fs_stat(full_path)
            local is_dir = stat and stat.type == "directory"
            
-           local icon = get_devicon(name, is_dir)
+           local icon, icon_hl = get_devicon(name, is_dir)
            if icon == "" then icon = "-" end -- Default placeholder if no icon
            
            local display = icon .. " " .. name
            if is_dir then display = display .. "/" end
            table.insert(lines, display)
+           
+           local icon_end = #icon
+           local name_start = icon_end + 1
+           local name_end = #display
+           
+           table.insert(highlights, {
+              line = #lines - 1,
+              icon_hl = icon_hl,
+              icon_end = icon_end,
+              is_dir = is_dir,
+              name_start = name_start,
+              name_end = name_end
+           })
         end
         render_preview_buffer(lines)
+        
+        -- Apply highlights
+        if vim.api.nvim_buf_is_valid(state.preview_buf_id) then
+           vim.api.nvim_buf_clear_namespace(state.preview_buf_id, icon_ns_id, 0, -1)
+           for _, hl in ipairs(highlights) do
+               if hl.icon_hl and hl.icon_hl ~= "" then
+                   vim.api.nvim_buf_set_extmark(state.preview_buf_id, icon_ns_id, hl.line, 0, {
+                       end_col = hl.icon_end,
+                       hl_group = hl.icon_hl,
+                   })
+               end
+               if hl.is_dir then
+                   vim.api.nvim_buf_set_extmark(state.preview_buf_id, icon_ns_id, hl.line, hl.name_start, {
+                       end_col = hl.name_end,
+                       hl_group = "TriadDirectory",
+                   })
+               end
+           end
+        end
       end
     elseif file_type == "text" then
       local lines, read_err = M.load_file_content(file_path, 100) -- Read first 100 lines

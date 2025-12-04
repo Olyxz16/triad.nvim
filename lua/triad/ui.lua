@@ -81,17 +81,50 @@ function M.render_parent_pane()
   end
 
   local lines_to_render = {}
+  local highlights = {} -- Stores highlight info
+
   for _, file_name in ipairs(files) do
     local full_path = Path:new(parent_path_str, file_name):__tostring()
     local stat = vim.uv.fs_stat(full_path)
     local is_dir = stat and stat.type == "directory"
 
-    local icon = get_devicon(file_name, is_dir)
+    local icon, icon_hl = get_devicon(file_name, is_dir)
     local display_name = icon .. " " .. file_name
     if is_dir then display_name = display_name .. "/" end
     table.insert(lines_to_render, display_name)
+
+    -- Store highlight info
+    local icon_end = #icon
+    local name_start = icon_end + 1
+    local name_end = #display_name
+
+    table.insert(highlights, {
+        line = #lines_to_render - 1,
+        icon_hl = icon_hl,
+        icon_end = icon_end,
+        is_dir = is_dir,
+        name_start = name_start,
+        name_end = name_end
+    })
   end
   render_buffer(state.parent_buf_id, lines_to_render)
+
+  -- Apply Highlights
+  vim.api.nvim_buf_clear_namespace(state.parent_buf_id, M.icon_ns_id, 0, -1)
+  for _, hl in ipairs(highlights) do
+      if hl.icon_hl and hl.icon_hl ~= "" then
+          vim.api.nvim_buf_set_extmark(state.parent_buf_id, M.icon_ns_id, hl.line, 0, {
+              end_col = hl.icon_end,
+              hl_group = hl.icon_hl,
+          })
+      end
+      if hl.is_dir then
+          vim.api.nvim_buf_set_extmark(state.parent_buf_id, M.icon_ns_id, hl.line, hl.name_start, {
+              end_col = hl.name_end,
+              hl_group = "TriadDirectory",
+          })
+      end
+  end
 end
 
 --- Renders the contents of the current directory to the current pane.
@@ -109,6 +142,7 @@ function M.render_current_pane()
   state.reset_original_file_data()
   local lines_to_render = {}
   local git_extmarks = {} -- Stores {line_idx, icon, hl_group}
+  local highlights = {} -- Stores highlight info
 
   -- Resolve current_dir to real path once for consistent git lookup (handles symlinks)
   local real_current_dir = vim.fn.resolve(state.current_dir)
@@ -122,13 +156,29 @@ function M.render_current_pane()
     local is_dir = stat and stat.type == "directory"
 
     -- Prepend devicon
-    local dev_icon = get_devicon(file_name, is_dir)
+    local dev_icon, dev_hl = get_devicon(file_name, is_dir)
     if dev_icon == "" then dev_icon = "-" end
     display_name = dev_icon .. " " .. display_name
 
     if is_dir then
         display_name = display_name .. "/"
     end
+
+    table.insert(lines_to_render, display_name)
+
+    -- Highlight Info
+    local icon_end = #dev_icon
+    local name_start = icon_end + 1
+    local name_end = #display_name
+
+    table.insert(highlights, {
+        line = #lines_to_render - 1,
+        icon_hl = dev_hl,
+        icon_end = icon_end,
+        is_dir = is_dir,
+        name_start = name_start,
+        name_end = name_end
+    })
 
     -- Git status icon (Extmarks)
     -- Use real_current_dir for lookup key construction to match git's absolute paths
@@ -169,10 +219,26 @@ function M.render_current_pane()
         table.insert(git_extmarks, { i - 1, git_icon, git_hl })
       end
     end
-    table.insert(lines_to_render, display_name)
   end
 
   render_buffer(state.current_buf_id, lines_to_render)
+  
+  -- Apply Icon/Dir Highlights
+  vim.api.nvim_buf_clear_namespace(state.current_buf_id, M.icon_ns_id, 0, -1)
+  for _, hl in ipairs(highlights) do
+      if hl.icon_hl and hl.icon_hl ~= "" then
+          vim.api.nvim_buf_set_extmark(state.current_buf_id, M.icon_ns_id, hl.line, 0, {
+              end_col = hl.icon_end,
+              hl_group = hl.icon_hl,
+          })
+      end
+      if hl.is_dir then
+          vim.api.nvim_buf_set_extmark(state.current_buf_id, M.icon_ns_id, hl.line, hl.name_start, {
+              end_col = hl.name_end,
+              hl_group = "TriadDirectory",
+          })
+      end
+  end
   
   -- Apply Git Extmarks
   vim.api.nvim_buf_clear_namespace(state.current_buf_id, M.git_ns_id, 0, -1)
@@ -191,6 +257,7 @@ local autohighlight_augroup_id = vim.api.nvim_create_augroup("TriadAutoHighlight
 
 M.highlight_ns_id = vim.api.nvim_create_namespace("TriadHighlights") -- New namespace for highlight
 M.git_ns_id = vim.api.nvim_create_namespace("TriadGitIcons") -- Namespace for git extmarks
+M.icon_ns_id = vim.api.nvim_create_namespace("TriadIcons") -- Namespace for file icons
 
 local is_closing = false
 
@@ -201,6 +268,7 @@ vim.api.nvim_set_hl(0, "TriadGitAdded", { link = "GitSignsAdd", default = true }
 vim.api.nvim_set_hl(0, "TriadGitDeleted", { link = "GitSignsDelete", default = true })
 vim.api.nvim_set_hl(0, "TriadGitConflict", { link = "DiagnosticError", default = true })
 vim.api.nvim_set_hl(0, "TriadGitUntracked", { link = "DiagnosticWarn", default = true })
+vim.api.nvim_set_hl(0, "TriadDirectory", { fg = "Cyan", default = true })
 
 --- Gets the filename from a display line (stripping icons).
 --- @param line string The display line.
