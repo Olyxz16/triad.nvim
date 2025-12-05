@@ -325,8 +325,10 @@ local function restore_cursor_position()
     local fname = get_filename_from_line(line)
     if fname == target_filename then
        pcall(vim.api.nvim_win_set_cursor, state.current_win_id, {i, 0})
-       -- Force redraw/scroll
-       vim.cmd("normal! zz")
+       -- Force redraw/scroll in the correct window
+       vim.api.nvim_win_call(state.current_win_id, function()
+           vim.cmd("normal! zz")
+       end)
        return
     end
   end
