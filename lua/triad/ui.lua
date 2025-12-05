@@ -387,6 +387,7 @@ local function open_confirmation_window(changes, on_confirm, on_cancel)
     border = "rounded",
     title = " Confirm Changes ",
     title_pos = "center",
+    zindex = 200,
   })
   
   -- Content
