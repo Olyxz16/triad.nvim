@@ -150,6 +150,7 @@ end
 
 --- Renders the contents of the current directory to the current pane.
 function M.render_current_pane()
+  print("DEBUG UI: M.render_current_pane called. Buf_id:", state.current_buf_id)
   if state.is_edit_mode then return end
   if not state.current_dir then return end
   if not state.current_buf_id or not vim.api.nvim_buf_is_valid(state.current_buf_id) then return end
@@ -247,6 +248,9 @@ function M.render_current_pane()
   end
 
   render_buffer(state.current_buf_id, lines_to_render)
+  local after_render_content = vim.api.nvim_buf_get_lines(state.current_buf_id, 0, -1, false)
+  print("DEBUG UI: M.render_current_pane: Content after render_buffer. Count:", #after_render_content)
+  for _, l in ipairs(after_render_content) do print("DEBUG UI:   " .. l) end
   
   -- Apply Tracking Extmarks (Must be after render)
   for _, hl in ipairs(highlights) do
@@ -625,10 +629,14 @@ function M.save_changes(on_complete)
   end
 
   local function handle_deny()
-        vim.notify("Triad: Changes cancelled. Buffer remains modified.")
-        if on_complete then on_complete(false) end
+        vim.notify("Triad: Changes cancelled. Reverting buffer to original state.")
+        vim.schedule(function()
+            M.render_current_pane() -- Reload from disk
+            vim.api.nvim_buf_set_option(state.current_buf_id, "modified", false)
+            if on_complete then on_complete(false) end
+        end)
   end
-
+  
   local function handle_revert()
       vim.notify("Triad: Reverting changes...")
       vim.schedule(function()

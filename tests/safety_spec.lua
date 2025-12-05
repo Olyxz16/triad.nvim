@@ -102,8 +102,8 @@ describe("Triad Safety", function()
     local file_path = temp_dir:joinpath("delete_me.txt")
     assert.is_true(file_path:exists(), "File should not be deleted if cancelled")
     
-    -- Buffer should still be modified
-    assert.is_true(vim.api.nvim_buf_get_option(state.current_buf_id, "modified"), "Buffer should remain modified")
+    -- Buffer should not be modified after rejection
+    assert.is_false(vim.api.nvim_buf_get_option(state.current_buf_id, "modified"), "Buffer should not be modified after rejection")
   end)
   
   it("applies changes if confirmed", function()
