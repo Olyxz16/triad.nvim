@@ -17,6 +17,17 @@ function M.read_dir(path)
     return nil, "Failed to open directory: " .. err
   end
 
+  -- Check if the path is actually inside the git repo we are tracking
+  local is_inside_repo = false
+  if state.is_git_repo and state.git_root then
+      local resolved_path = vim.fn.resolve(path)
+      -- Ensure strict prefix match (either root itself or subdir)
+      -- Standardize trailing slash for matching if needed, but resolve usually strips it
+      if resolved_path == state.git_root or resolved_path:sub(1, #state.git_root + 1) == state.git_root .. "/" then
+          is_inside_repo = true
+      end
+  end
+
   while true do
     local entries = vim.uv.fs_readdir(handle)
     if not entries then -- End of directory or error
@@ -32,7 +43,7 @@ function M.read_dir(path)
         if config_show_hidden then
             is_hidden = false
         else
-            if state.is_git_repo then
+            if is_inside_repo then
                 -- Explicitly hide .git directory
                 if name == ".git" then
                     is_hidden = true
@@ -52,7 +63,7 @@ function M.read_dir(path)
                 end
                 -- Dotfiles are NOT hidden by default in git mode (unless explicitly hidden above)
             else
-                -- Non-Git Mode: Hide dotfiles
+                -- Non-Git Mode (or outside repo): Hide dotfiles
                 if name:sub(1, 1) == "." then
                     is_hidden = true
                 end
