@@ -11,9 +11,9 @@ local config = {}
 -- Default configuration
 config = {
   layout = {
-    parent_width = 20,  -- Left pane (Short)
-    current_width = 35, -- Center pane (Medium)
-    preview_width = 45, -- Right pane (Largest, remainder)
+    parent_width = 15,  -- Left pane (Short)
+    current_width = 45, -- Center pane (Medium)
+    preview_width = 40, -- Right pane (Largest, remainder)
     -- Future: ratios, min/max widths
   },
   keymaps = {

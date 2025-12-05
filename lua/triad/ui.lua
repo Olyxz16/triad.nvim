@@ -818,8 +818,8 @@ function M.create_layout()
   local editor_width = vim.api.nvim_get_option("columns")
   local editor_height = vim.api.nvim_get_option("lines")
 
-  local total_width = math.floor(editor_width * 0.8)
-  local total_height = math.floor(editor_height * 0.8)
+  local total_width = math.floor(editor_width * 0.9)
+  local total_height = math.floor(editor_height * 0.9)
 
   local row = math.floor((editor_height - total_height) / 2)
   local col = math.floor((editor_width - total_width) / 2)
