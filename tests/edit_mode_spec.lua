@@ -14,7 +14,9 @@ describe("Triad Edit Mode", function()
 
     temp_dir = Path:new(vim.fn.tempname())
     temp_dir:mkdir()
-    temp_dir:joinpath("file.txt"):touch()
+    temp_dir:joinpath("a.txt"):touch()
+    temp_dir:joinpath("b.txt"):touch()
+    temp_dir:joinpath("c.txt"):touch()
   end)
 
   after_each(function()
@@ -36,5 +38,22 @@ describe("Triad Edit Mode", function()
     
     -- Check state: Edit mode -> modifiable = true
     assert.is_true(vim.api.nvim_buf_get_option(state.current_buf_id, "modifiable"), "Buffer should be modifiable in edit mode")
+  end)
+
+  it("preserves cursor position when entering edit mode", function()
+    vim.api.nvim_set_current_dir(temp_dir:absolute())
+    triad.open()
+    vim.wait(50)
+
+    -- Move cursor to first line
+    vim.api.nvim_win_set_cursor(state.current_win_id, {1, 0})
+    local initial_pos = vim.api.nvim_win_get_cursor(state.current_win_id)
+    
+    -- Trigger edit mode
+    require("triad.ui").enable_edit_mode()
+    
+    -- Check cursor position
+    local final_pos = vim.api.nvim_win_get_cursor(state.current_win_id)
+    assert.are.same(initial_pos[1], final_pos[1], "Cursor row should remain unchanged")
   end)
 end)

@@ -901,8 +901,8 @@ function M.enable_edit_mode(post_action)
     end
   end, opts)
 
-  -- Ensure we are in Normal mode and cursor is visible
-  vim.cmd("normal! Gzz") 
+  -- Ensure we are in Normal mode
+  -- vim.cmd("normal! Gzz") -- Removed to preserve cursor position 
   
   -- Set Read-Write LAST to ensure it sticks
   vim.api.nvim_buf_set_option(state.current_buf_id, "modifiable", true)
