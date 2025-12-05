@@ -74,6 +74,27 @@ function M.render_parent_pane()
   if not state.parent_buf_id or not vim.api.nvim_buf_is_valid(state.parent_buf_id) then return end
 
   local parent_path_str = Path:new(state.current_dir):parent():__tostring()
+  
+  -- Check if we are at root (parent is same as current)
+  if parent_path_str == state.current_dir or parent_path_str == nil then
+      local icon, icon_hl = get_devicon("/", true)
+      local lines = { icon .. " /" }
+      render_buffer(state.parent_buf_id, lines)
+      
+      vim.api.nvim_buf_clear_namespace(state.parent_buf_id, M.icon_ns_id, 0, -1)
+      if icon_hl ~= "" then
+          vim.api.nvim_buf_set_extmark(state.parent_buf_id, M.icon_ns_id, 0, 0, {
+              end_col = #icon,
+              hl_group = icon_hl,
+          })
+      end
+      vim.api.nvim_buf_set_extmark(state.parent_buf_id, M.icon_ns_id, 0, #icon + 1, {
+          end_col = #lines[1],
+          hl_group = "TriadDirectory",
+      })
+      return
+  end
+
   local files, err = fs.read_dir(parent_path_str)
   if err then
     render_buffer(state.parent_buf_id, { "Error: " .. err })
@@ -904,7 +925,6 @@ function M.enable_edit_mode(post_action)
   end, opts)
 
   -- Ensure we are in Normal mode
-  -- vim.cmd("normal! Gzz") -- Removed to preserve cursor position 
   
   -- Set Read-Write LAST to ensure it sticks
   vim.api.nvim_buf_set_option(state.current_buf_id, "modifiable", true)
