@@ -1,4 +1,3 @@
-
 ---@class TriadGit
 local M = {}
 
@@ -18,17 +17,20 @@ function M.fetch_git_status()
       if j_root.code ~= 0 then
          -- Not a git repo? Clear status
          state.git_status_data = {}
+         state.is_git_repo = false
          require("triad.ui").render_current_pane()
          return 
       end
       
       local git_root = j_root:result()[1]
       if not git_root then return end
+
+      state.is_git_repo = true
       
       -- 2. Get Status
       Job:new({
         command = "git",
-        args = { "status", "--porcelain", "-u", "--ignored" },
+        args = { "status", "--porcelain", "--ignored" },
         cwd = state.current_dir,
         on_exit = vim.schedule_wrap(function(j_status)
           state.git_status_data = {}

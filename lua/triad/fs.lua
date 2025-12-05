@@ -1,14 +1,15 @@
-
----@class TriadFS
+---
+--@class TriadFS
 local M = {}
 
 local Path = require("plenary.path")
 local state = require("triad.state") -- Require triad.state instead of triad.init
 
---- Reads the contents of a directory.
---- @param path string The path to the directory.
---- @return table|nil files A list of file/directory names, or nil if an error occurred.
---- @return string|nil err An error message if an error occurred.
+---
+-- Reads the contents of a directory.
+-- @param path string The path to the directory.
+-- @return table|nil files A list of file/directory names, or nil if an error occurred.
+-- @return string|nil err An error message if an error occurred.
 function M.read_dir(path)
   local entries_list = {}
   local handle, err = vim.uv.fs_opendir(path)
@@ -25,9 +26,35 @@ function M.read_dir(path)
     for _, entry in ipairs(entries) do
       local name = entry.name
       if name ~= "." and name ~= ".." then
-        if state.config and not state.config.show_hidden and name:sub(1,1) == "." then
-          -- Skip hidden files if show_hidden is false
+        local is_hidden = false
+        local config_show_hidden = state.config and state.config.show_hidden
+
+        if config_show_hidden then
+            is_hidden = false
         else
+            if state.is_git_repo then
+                -- Git Mode: Hide ignored files
+                -- Resolve path to ensure matches git's resolved root
+                local resolved_path = vim.fn.resolve(path)
+                local full_path = Path:new(resolved_path, name):__tostring()
+                
+                -- Normalize path key to match git.lua's storage
+                if full_path:sub(-1) == "/" then full_path = full_path:sub(1, -2) end
+
+                local status = state.git_status_data[full_path]
+                if status and (status:sub(1, 1) == "!" or status:match("!!")) then
+                    is_hidden = true
+                end
+                -- Dotfiles are NOT hidden by default in git mode
+            else
+                -- Non-Git Mode: Hide dotfiles
+                if name:sub(1, 1) == "." then
+                    is_hidden = true
+                end
+            end
+        end
+
+        if not is_hidden then
           table.insert(entries_list, entry)
         end
       end
@@ -50,11 +77,12 @@ function M.read_dir(path)
   return files
 end
 
---- Renames a file or directory.
---- @param old_path string The old path.
---- @param new_path string The new path.
---- @return boolean success True if successful, false otherwise.
---- @return string|nil err An error message if an error occurred.
+---
+-- Renames a file or directory.
+-- @param old_path string The old path.
+-- @param new_path string The new path.
+-- @return boolean success True if successful, false otherwise.
+-- @return string|nil err An error message if an error occurred.
 function M.rename(old_path, new_path)
   local ok, err = vim.uv.fs_rename(old_path, new_path)
   if err then
@@ -64,10 +92,11 @@ function M.rename(old_path, new_path)
   end
 end
 
---- Unlinks (deletes) a file.
---- @param path string The path to the file.
---- @return boolean success True if successful, false otherwise.
---- @return string|nil err An error message if an error occurred.
+---
+-- Unlinks (deletes) a file.
+-- @param path string The path to the file.
+-- @return boolean success True if successful, false otherwise.
+-- @return string|nil err An error message if an error occurred.
 function M.unlink(path)
   local ok, err = vim.uv.fs_unlink(path)
   if err then
@@ -77,10 +106,11 @@ function M.unlink(path)
   end
 end
 
---- Creates a directory.
---- @param path string The path to the directory.
---- @return boolean success True if successful, false otherwise.
---- @return string|nil err An error message if an error occurred.
+---
+-- Creates a directory.
+-- @param path string The path to the directory.
+-- @return boolean success True if successful, false otherwise.
+-- @return string|nil err An error message if an error occurred.
 function M.mkdir(path)
   -- 493 is 0755 in octal
   local ok, err = vim.uv.fs_mkdir(path, 493)
@@ -91,10 +121,11 @@ function M.mkdir(path)
   end
 end
 
---- Creates an empty file.
---- @param path string The path to the file.
---- @return boolean success True if successful, false otherwise.
---- @return string|nil err An error message if an error occurred.
+---
+-- Creates an empty file.
+-- @param path string The path to the file.
+-- @return boolean success True if successful, false otherwise.
+-- @return string|nil err An error message if an error occurred.
 function M.touch(path)
   -- 420 is 0644 in octal, "w" creates/truncates
   local fd, err = vim.uv.fs_open(path, "w", 420)

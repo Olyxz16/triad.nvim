@@ -693,6 +693,15 @@ function M.enable_nav_mode()
   vim.keymap.set("n", "<Down>", "j", opts)
   vim.keymap.set("n", "<Up>", "k", opts)
 
+  -- Toggle Hidden Files
+  vim.keymap.set("n", ".", function()
+    if state.config then
+        state.config.show_hidden = not state.config.show_hidden
+        M.render_current_pane()
+        M.render_parent_pane()
+    end
+  end, opts)
+
   -- Switch to Edit Mode
   vim.keymap.set("n", "e", function() M.enable_edit_mode() end, opts)
   
