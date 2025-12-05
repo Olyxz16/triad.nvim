@@ -33,19 +33,24 @@ function M.read_dir(path)
             is_hidden = false
         else
             if state.is_git_repo then
-                -- Git Mode: Hide ignored files
-                -- Resolve path to ensure matches git's resolved root
-                local resolved_path = vim.fn.resolve(path)
-                local full_path = Path:new(resolved_path, name):__tostring()
-                
-                -- Normalize path key to match git.lua's storage
-                if full_path:sub(-1) == "/" then full_path = full_path:sub(1, -2) end
-
-                local status = state.git_status_data[full_path]
-                if status and (status:sub(1, 1) == "!" or status:match("!!")) then
+                -- Explicitly hide .git directory
+                if name == ".git" then
                     is_hidden = true
+                else
+                    -- Git Mode: Hide ignored files
+                    -- Resolve path to ensure matches git's resolved root
+                    local resolved_path = vim.fn.resolve(path)
+                    local full_path = Path:new(resolved_path, name):__tostring()
+                    
+                    -- Normalize path key to match git.lua's storage
+                    if full_path:sub(-1) == "/" then full_path = full_path:sub(1, -2) end
+
+                    local status = state.git_status_data[full_path]
+                    if status and (status:sub(1, 1) == "!" or status:match("!!")) then
+                        is_hidden = true
+                    end
                 end
-                -- Dotfiles are NOT hidden by default in git mode
+                -- Dotfiles are NOT hidden by default in git mode (unless explicitly hidden above)
             else
                 -- Non-Git Mode: Hide dotfiles
                 if name:sub(1, 1) == "." then

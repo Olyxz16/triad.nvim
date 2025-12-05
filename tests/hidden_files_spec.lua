@@ -133,4 +133,28 @@ describe("Hidden Files Logic", function()
     local files = fs.read_dir(cwd)
     assert.is_false(vim.tbl_contains(files, "ignored_dir"), "Ignored directory should be hidden")
   end)
+
+  it("Git Mode: hides .git directory by default and shows it when toggled", function()
+    -- Setup Git Repo
+    Job:new({ command = "git", args = { "init" }, cwd = cwd }):sync()
+    state.is_git_repo = true
+    
+    -- Ensure .git dir exists (it's created by git init)
+    local git_dir = cwd .. "/.git"
+    assert.is_true(vim.fn.isdirectory(git_dir) == 1, ".git directory should exist")
+
+    -- Check Visibility by default (should be hidden)
+    local files = fs.read_dir(cwd)
+    assert.is_false(vim.tbl_contains(files, ".git"), ".git directory should be hidden by default in git mode")
+
+    -- Toggle Hidden (should be visible)
+    state.config.show_hidden = true
+    files = fs.read_dir(cwd)
+    assert.is_true(vim.tbl_contains(files, ".git"), ".git directory should be visible when hidden files are toggled")
+    
+    -- Toggle Back (should be hidden again)
+    state.config.show_hidden = false
+    files = fs.read_dir(cwd)
+    assert.is_false(vim.tbl_contains(files, ".git"), ".git directory should be hidden again after toggling off")
+  end)
 end)
