@@ -144,14 +144,23 @@ function M.render_current_pane()
   local git_extmarks = {} -- Stores {line_idx, icon, hl_group}
   local highlights = {} -- Stores highlight info
 
+  -- Clear Extmarks
+  vim.api.nvim_buf_clear_namespace(state.current_buf_id, M.tracker_ns_id, 0, -1)
+
   -- Resolve current_dir to real path once for consistent git lookup (handles symlinks)
   local real_current_dir = vim.fn.resolve(state.current_dir)
 
   for i, file_name in ipairs(files) do
-    state.original_file_data[i] = Path:new(state.current_dir, file_name):__tostring()
-    local display_name = file_name
-
     local full_path = Path:new(state.current_dir, file_name):__tostring()
+    state.original_file_data[i] = full_path
+    
+    -- Set Extmark for Tracking
+    -- We defer setting extmark until AFTER render_buffer because render_buffer replaces lines/clears buffer?
+    -- render_buffer does set_lines(0, -1), which Wipes extmarks usually?
+    -- No, standard extmarks might move or get deleted.
+    -- We should set lines first, then add extmarks.
+    
+    local display_name = file_name
     local stat = vim.uv.fs_stat(full_path)
     local is_dir = stat and stat.type == "directory"
 
@@ -177,11 +186,11 @@ function M.render_current_pane()
         icon_end = icon_end,
         is_dir = is_dir,
         name_start = name_start,
-        name_end = name_end
+        name_end = name_end,
+        full_path = full_path -- Store for extmark creation later
     })
 
     -- Git status icon (Extmarks)
-    -- Use real_current_dir for lookup key construction to match git's absolute paths
     local lookup_path = Path:new(real_current_dir, file_name):__tostring()
     if lookup_path:sub(-1) == "/" then lookup_path = lookup_path:sub(1, -2) end
     
@@ -223,6 +232,15 @@ function M.render_current_pane()
 
   render_buffer(state.current_buf_id, lines_to_render)
   
+  -- Apply Tracking Extmarks (Must be after render)
+  for _, hl in ipairs(highlights) do
+      -- Use range extmark (covering first char) to ensure it gets deleted if the line is deleted.
+      local id = vim.api.nvim_buf_set_extmark(state.current_buf_id, M.tracker_ns_id, hl.line, 0, {
+          end_col = 1
+      })
+      state.tracked_extmarks[id] = hl.full_path
+  end
+
   -- Apply Icon/Dir Highlights
   vim.api.nvim_buf_clear_namespace(state.current_buf_id, M.icon_ns_id, 0, -1)
   for _, hl in ipairs(highlights) do
@@ -253,22 +271,28 @@ end
 local oil_augroup_id = vim.api.nvim_create_augroup("TriadOilEngine", { clear = true })
 local preview_augroup_id = vim.api.nvim_create_augroup("TriadPreview", { clear = true })
 local autoclose_augroup_id = vim.api.nvim_create_augroup("TriadAutoClose", { clear = true })
-local autohighlight_augroup_id = vim.api.nvim_create_augroup("TriadAutoHighlight", { clear = true }) -- New augroup for highlight
+local autohighlight_augroup_id = vim.api.nvim_create_augroup("TriadAutoHighlight", { clear = true })
 
-M.highlight_ns_id = vim.api.nvim_create_namespace("TriadHighlights") -- New namespace for highlight
-M.git_ns_id = vim.api.nvim_create_namespace("TriadGitIcons") -- Namespace for git extmarks
-M.icon_ns_id = vim.api.nvim_create_namespace("TriadIcons") -- Namespace for file icons
+M.highlight_ns_id = vim.api.nvim_create_namespace("TriadHighlights")
+M.git_ns_id = vim.api.nvim_create_namespace("TriadGitIcons")
+M.icon_ns_id = vim.api.nvim_create_namespace("TriadIcons")
+M.tracker_ns_id = vim.api.nvim_create_namespace("TriadFileTracker") -- New namespace
 
 local is_closing = false
 
 -- Define the highlight group for the selected line
-vim.api.nvim_set_hl(0, "TriadSelectedLine", { link = "CursorLine" }) -- Link to 'CursorLine' to span full width
+vim.api.nvim_set_hl(0, "TriadSelectedLine", { link = "CursorLine" })
 vim.api.nvim_set_hl(0, "TriadGitModified", { link = "GitSignsChange", default = true })
 vim.api.nvim_set_hl(0, "TriadGitAdded", { link = "GitSignsAdd", default = true })
 vim.api.nvim_set_hl(0, "TriadGitDeleted", { link = "GitSignsDelete", default = true })
 vim.api.nvim_set_hl(0, "TriadGitConflict", { link = "DiagnosticError", default = true })
 vim.api.nvim_set_hl(0, "TriadGitUntracked", { link = "DiagnosticWarn", default = true })
 vim.api.nvim_set_hl(0, "TriadDirectory", { fg = "Cyan", default = true })
+
+-- Confirmation Window Highlights
+vim.api.nvim_set_hl(0, "TriadConfirmAdd", { fg = "Green", bold = true })
+vim.api.nvim_set_hl(0, "TriadConfirmDelete", { fg = "Red", bold = true })
+vim.api.nvim_set_hl(0, "TriadConfirmChange", { fg = "Yellow", bold = true })
 
 --- Gets the filename from a display line (stripping icons).
 --- @param line string The display line.
@@ -328,29 +352,102 @@ local function set_line_highlight(buf_id, line_num)
   end
 end
 
+--- Opens a confirmation window listing the pending changes.
+--- @param changes table List of formatted strings (lines) to display.
+--- @param on_confirm function Callback when user confirms.
+--- @param on_cancel function Callback when user cancels.
+local function open_confirmation_window(changes, on_confirm, on_cancel)
+  local buf_name = "triad://confirmation"
+  local existing = vim.fn.bufnr(buf_name)
+  if existing ~= -1 then
+      pcall(vim.api.nvim_buf_delete, existing, { force = true })
+  end
+
+  local buf = vim.api.nvim_create_buf(false, true)
+  vim.api.nvim_buf_set_name(buf, buf_name)
+  vim.api.nvim_buf_set_option(buf, "buftype", "nofile")
+  vim.api.nvim_buf_set_option(buf, "bufhidden", "wipe")
+  vim.api.nvim_buf_set_option(buf, "filetype", "triad_confirm")
+
+  local width = 60
+  -- Determine height: changes + header/footer/spacing. Max out at some reasonable height.
+  local content_height = #changes + 4
+  local height = math.min(content_height, math.floor(vim.o.lines * 0.8))
+  
+  local row = math.floor((vim.o.lines - height) / 2)
+  local col = math.floor((vim.o.columns - width) / 2)
+
+  local win = vim.api.nvim_open_win(buf, true, {
+    relative = "editor",
+    width = width,
+    height = height,
+    row = row,
+    col = col,
+    style = "minimal",
+    border = "rounded",
+    title = " Confirm Changes ",
+    title_pos = "center",
+  })
+  
+  -- Content
+  local lines = { "The following changes will be made:", "" }
+  for _, l in ipairs(changes) do table.insert(lines, l) end
+  table.insert(lines, "")
+  table.insert(lines, "Press 'y' to confirm, 'n' to cancel.")
+  
+  vim.api.nvim_buf_set_lines(buf, 0, -1, false, lines)
+  vim.api.nvim_buf_set_option(buf, "modifiable", false)
+
+  -- Highlights
+  local ns_id = vim.api.nvim_create_namespace("TriadConfirm")
+  for i, change_text in ipairs(changes) do
+      local line_idx = i + 1 -- 0-based index for API, but lines table has header at 1, 2. 
+      local hl_group = "Normal"
+      if change_text:match("^%[%+.*%]") then hl_group = "TriadConfirmAdd" end
+      if change_text:match("^%[%-.*%]") then hl_group = "TriadConfirmDelete" end
+      if change_text:match("^%[~.*%]") then hl_group = "TriadConfirmChange" end
+      
+      vim.api.nvim_buf_add_highlight(buf, ns_id, hl_group, line_idx, 0, -1)
+  end
+  
+  local function close()
+    if vim.api.nvim_win_is_valid(win) then vim.api.nvim_win_close(win, true) end
+  end
+
+  local opts = { noremap = true, silent = true, buffer = buf }
+  local confirm = function() close() on_confirm() end
+  local cancel = function() close() on_cancel() end
+  
+  vim.keymap.set("n", "y", confirm, opts)
+  vim.keymap.set("n", "Y", confirm, opts)
+  vim.keymap.set("n", "n", cancel, opts)
+  vim.keymap.set("n", "N", cancel, opts)
+  vim.keymap.set("n", "q", cancel, opts)
+  vim.keymap.set("n", "<Esc>", cancel, opts)
+end
+
 --- Handles BufWriteCmd for the current pane to manage file system changes.
 --- @param on_complete function|nil Callback(success: boolean)
 function M.save_changes(on_complete)
   -- Read current lines from buffer
   local current_lines = vim.api.nvim_buf_get_lines(state.current_buf_id, 0, -1, false)
 
-  -- 1. Identify Original Files (State)
+  -- Build lookup set for original filenames to help parsing
   local original_names_set = {}
-  local original_files_list = {} -- indexed by line number
-  local max_orig_line = 0
-  for line_num, full_path in pairs(state.original_file_data) do
+  for _, full_path in pairs(state.original_file_data) do
     local name = vim.fn.fnamemodify(full_path, ":t")
     original_names_set[name] = true
-    original_files_list[line_num] = { name = name, full_path = full_path }
-    if line_num > max_orig_line then max_orig_line = line_num end
   end
 
-  -- 2. Parse current lines
-  local current_files = {}
-  local current_idx = 1
+  local creates = {}
+  local deletes = {}
+  local renames = {}
+  local processed_paths = {}
+
   for i, line in ipairs(current_lines) do
     -- Skip empty or whitespace-only lines
     if line:match("%S") then
+        -- Parse name using same logic as render to be consistent
         local icon_part, name_part = line:match("^([^%s]*)%s?(.*)")
         local effective_name = line
         local raw_name = line
@@ -371,63 +468,38 @@ function M.save_changes(on_complete)
            effective_name = line:gsub("/$", "")
            raw_name = line
         end
-        current_files[current_idx] = { raw = raw_name, name = effective_name }
-        current_idx = current_idx + 1
-    end
-  end
+        
+        local current_name = effective_name
 
-  -- 3. Calculate Diff
-  local creates = {}
-  local deletes = {}
-  local renames = {}
-  local processed_current = {}
-  local processed_original = {}
-
-  -- Identify Keeps (Same name exists)
-  for i, file_info in ipairs(current_files) do
-    if original_names_set[file_info.name] then
-        processed_current[i] = true
-        -- Mark original instance
-        for orig_i, orig_data in pairs(original_files_list) do
-            if orig_data.name == file_info.name then
-                processed_original[orig_i] = true
-                break
-            end
+        -- Check for Extmark on this line
+        local marks = vim.api.nvim_buf_get_extmarks(state.current_buf_id, M.tracker_ns_id, {i-1, 0}, {i-1, -1}, {})
+        local orig_path = nil
+        for _, m in ipairs(marks) do
+             local id = m[1]
+             if state.tracked_extmarks[id] then
+                 orig_path = state.tracked_extmarks[id]
+                 break
+             end
+        end
+        
+        if orig_path then
+             local orig_name = vim.fn.fnamemodify(orig_path, ":t")
+             if orig_name ~= current_name then
+                 table.insert(renames, { from = { name = orig_name, full_path = orig_path }, to = { name = current_name } })
+             end
+             processed_paths[orig_path] = true
+        else
+             table.insert(creates, { name = current_name, raw = raw_name })
         end
     end
   end
-
-  local max_line = math.max(#current_files, max_orig_line)
-  for i = 1, max_line do
-    local curr = current_files[i]
-    local orig = original_files_list[i]
-    local is_curr_processed = processed_current[i]
-    local is_orig_processed = processed_original[i]
-
-    if curr and not is_curr_processed and orig and not is_orig_processed then
-        table.insert(renames, { from = orig, to = curr })
-        processed_current[i] = true
-        processed_original[i] = true
-    elseif curr and not is_curr_processed then
-        table.insert(creates, curr)
-        processed_current[i] = true
-    elseif orig and not is_orig_processed then
-        table.insert(deletes, orig)
-        processed_original[i] = true
-    end
-  end
   
-  -- Stragglers
-  for line_num, orig_data in pairs(original_files_list) do
-      if not processed_original[line_num] then
-         table.insert(deletes, orig_data)
-         processed_original[line_num] = true
-      end
-  end
-  for i, curr in ipairs(current_files) do
-      if not processed_current[i] then
-        table.insert(creates, curr)
-        processed_current[i] = true
+  -- Detect Deletes: Any tracked path not found in current lines
+  local deleted_paths_set = {}
+  for _, path in pairs(state.tracked_extmarks) do
+      if not processed_paths[path] and not deleted_paths_set[path] then
+          table.insert(deletes, { name = vim.fn.fnamemodify(path, ":t"), full_path = path })
+          deleted_paths_set[path] = true
       end
   end
 
@@ -439,18 +511,18 @@ function M.save_changes(on_complete)
       return
   end
 
-  local summary = {}
-  if #creates > 0 then table.insert(summary, "Create: " .. #creates) end
-  if #renames > 0 then table.insert(summary, "Rename: " .. #renames) end
-  if #deletes > 0 then table.insert(summary, "Delete: " .. #deletes) end
+  local summary_lines = {}
+  for _, item in ipairs(creates) do
+      table.insert(summary_lines, "[+] " .. item.name)
+  end
+  for _, item in ipairs(renames) do
+      table.insert(summary_lines, "[~] " .. item.from.name .. " -> " .. item.to.name)
+  end
+  for _, item in ipairs(deletes) do
+      table.insert(summary_lines, "[-] " .. item.name)
+  end
   
-  local prompt_str = "Apply changes? (" .. table.concat(summary, ", ") .. ")"
-  
-  vim.ui.select({ "Yes", "No" }, {
-    prompt = prompt_str,
-    format_item = function(item) return item end
-  }, function(choice)
-    if choice == "Yes" then
+  open_confirmation_window(summary_lines, function()
         -- Apply Changes
         for _, item in ipairs(renames) do
             local new_full_path = Path:new(state.current_dir, item.to.name):__tostring()
@@ -480,10 +552,9 @@ function M.save_changes(on_complete)
             M.render_parent_pane()
             if on_complete then on_complete(true) end
         end)
-    else
+  end, function()
         vim.notify("Triad: Changes cancelled. Press 'u' to undo edits.")
         if on_complete then on_complete(false) end
-    end
   end)
 end
 
