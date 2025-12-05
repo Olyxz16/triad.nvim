@@ -155,11 +155,6 @@ function M.render_current_pane()
     state.original_file_data[i] = full_path
     
     -- Set Extmark for Tracking
-    -- We defer setting extmark until AFTER render_buffer because render_buffer replaces lines/clears buffer?
-    -- render_buffer does set_lines(0, -1), which Wipes extmarks usually?
-    -- No, standard extmarks might move or get deleted.
-    -- We should set lines first, then add extmarks.
-    
     local display_name = file_name
     local stat = vim.uv.fs_stat(full_path)
     local is_dir = stat and stat.type == "directory"
@@ -334,21 +329,6 @@ local function restore_cursor_position()
        vim.cmd("normal! zz")
        return
     end
-  end
-end
-
---- Helper to set/clear line highlight
---- @param buf_id number
---- @param line_num number|nil 1-based line number to highlight, or nil to clear all.
-local function set_line_highlight(buf_id, line_num)
-  if not buf_id or not vim.api.nvim_buf_is_valid(buf_id) then return end
-  vim.api.nvim_buf_clear_namespace(buf_id, M.highlight_ns_id, 0, -1) -- Clear all custom highlights
-
-  if line_num then
-    vim.api.nvim_buf_set_extmark(buf_id, M.highlight_ns_id, line_num - 1, 0, {
-        line_hl_group = "TriadSelectedLine",
-        priority = 200,
-    })
   end
 end
 
@@ -882,20 +862,7 @@ function M.enable_nav_mode()
   vim.keymap.set("n", "a", trigger_edit("a"), opts)
   vim.keymap.set("n", "A", trigger_edit("A"), opts)
 
-  -- Set up CursorMoved autocommand for line highlighting
-  vim.api.nvim_clear_autocmds({ group = autohighlight_augroup_id })
-  vim.api.nvim_create_autocmd("CursorMoved", {
-    group = autohighlight_augroup_id,
-    buffer = state.current_buf_id,
-    callback = vim.schedule_wrap(function()
-      if not vim.api.nvim_buf_is_valid(state.current_buf_id) then return end
-      local cursor_row = vim.api.nvim_win_get_cursor(0)[1]
-      set_line_highlight(state.current_buf_id, cursor_row)
-    end),
-  })
-  -- Initial highlight
-  local initial_cursor_row = vim.api.nvim_win_get_cursor(0)[1]
-  set_line_highlight(state.current_buf_id, initial_cursor_row)
+  -- Initial highlight logic removed, relying on cursorline
 end
 
 --- Enables Edit Mode (Read-Write, standard Vim keymaps)
@@ -1017,7 +984,10 @@ function M.create_layout()
   state.current_win_id = vim.api.nvim_open_win(state.current_buf_id, true, win_opts)
   vim.api.nvim_win_set_width(state.current_win_id, current_width)
   vim.api.nvim_win_set_option(state.current_win_id, "winfixwidth", true)
-  vim.api.nvim_win_set_option(state.current_win_id, "winhighlight", "Normal:Normal,FloatBorder:Normal")
+  
+  -- Use built-in cursorline option instead of manual highlighting to prevent blinking
+  vim.api.nvim_win_set_option(state.current_win_id, "cursorline", true)
+  vim.api.nvim_win_set_option(state.current_win_id, "winhighlight", "Normal:Normal,FloatBorder:Normal,CursorLine:TriadSelectedLine")
 
   -- Preview Window
   win_opts.col = col + parent_width + current_width + 4 -- +4 for two previous windows borders
