@@ -355,8 +355,9 @@ end
 --- Opens a confirmation window listing the pending changes.
 --- @param changes table List of formatted strings (lines) to display.
 --- @param on_confirm function Callback when user confirms.
---- @param on_cancel function Callback when user cancels.
-local function open_confirmation_window(changes, on_confirm, on_cancel)
+--- @param on_deny function Callback when user denies.
+--- @param on_revert function Callback when user reverts.
+local function open_confirmation_window(changes, on_confirm, on_deny, on_revert)
   local buf_name = "triad://confirmation"
   local existing = vim.fn.bufnr(buf_name)
   if existing ~= -1 then
@@ -370,7 +371,7 @@ local function open_confirmation_window(changes, on_confirm, on_cancel)
   vim.api.nvim_buf_set_option(buf, "filetype", "triad_confirm")
 
   local width = 60
-  -- Determine height: changes + header/footer/spacing. Max out at some reasonable height.
+  -- Determine height: changes + header + buttons.
   local content_height = #changes + 4
   local height = math.min(content_height, math.floor(vim.o.lines * 0.8))
   
@@ -390,11 +391,22 @@ local function open_confirmation_window(changes, on_confirm, on_cancel)
     zindex = 200,
   })
   
+  -- Buttons Layout
+  local btn_confirm = "[Confirm (y)]"
+  local btn_deny    = "[Deny (n)]"
+  local btn_revert  = "[Revert (r)]"
+  
+  -- Calculate spacing to center buttons
+  local total_btn_len = #btn_confirm + #btn_deny + #btn_revert + 4 -- 2 spaces between each
+  local start_col = math.floor((width - total_btn_len) / 2)
+  local padding = string.rep(" ", start_col)
+  local buttons_line = padding .. btn_confirm .. "  " .. btn_deny .. "  " .. btn_revert
+  
   -- Content
   local lines = { "The following changes will be made:", "" }
   for _, l in ipairs(changes) do table.insert(lines, l) end
   table.insert(lines, "")
-  table.insert(lines, "Press 'y' to confirm, 'n' to cancel.")
+  table.insert(lines, buttons_line)
   
   vim.api.nvim_buf_set_lines(buf, 0, -1, false, lines)
   vim.api.nvim_buf_set_option(buf, "modifiable", false)
@@ -402,29 +414,83 @@ local function open_confirmation_window(changes, on_confirm, on_cancel)
   -- Highlights
   local ns_id = vim.api.nvim_create_namespace("TriadConfirm")
   for i, change_text in ipairs(changes) do
-      local line_idx = i + 1 -- 0-based index for API, but lines table has header at 1, 2. 
+      local line_idx = i + 1
       local hl_group = "Normal"
       if change_text:match("^%[%+.*%]") then hl_group = "TriadConfirmAdd" end
       if change_text:match("^%[%-.*%]") then hl_group = "TriadConfirmDelete" end
       if change_text:match("^%[~.*%]") then hl_group = "TriadConfirmChange" end
-      
       vim.api.nvim_buf_add_highlight(buf, ns_id, hl_group, line_idx, 0, -1)
   end
+  
+  -- Button Highlights
+  local btn_line_idx = #lines - 1
+  local confirm_start = start_col
+  local confirm_end = confirm_start + #btn_confirm
+  local deny_start = confirm_end + 2
+  local deny_end = deny_start + #btn_deny
+  local revert_start = deny_end + 2
+  local revert_end = revert_start + #btn_revert
+  
+  local selected_idx = 1 -- 1: confirm, 2: deny, 3: revert
+  
+  local function draw_selection()
+      vim.api.nvim_buf_clear_namespace(buf, ns_id, btn_line_idx, btn_line_idx + 1)
+      local hl = "Visual" -- Highlight for selected button
+      
+      if selected_idx == 1 then
+          vim.api.nvim_buf_set_extmark(buf, ns_id, btn_line_idx, confirm_start, { end_col = confirm_end, hl_group = hl })
+      elseif selected_idx == 2 then
+          vim.api.nvim_buf_set_extmark(buf, ns_id, btn_line_idx, deny_start, { end_col = deny_end, hl_group = hl })
+      elseif selected_idx == 3 then
+          vim.api.nvim_buf_set_extmark(buf, ns_id, btn_line_idx, revert_start, { end_col = revert_end, hl_group = hl })
+      end
+  end
+  draw_selection()
   
   local function close()
     if vim.api.nvim_win_is_valid(win) then vim.api.nvim_win_close(win, true) end
   end
 
   local opts = { noremap = true, silent = true, buffer = buf }
-  local confirm = function() close() on_confirm() end
-  local cancel = function() close() on_cancel() end
   
-  vim.keymap.set("n", "y", confirm, opts)
-  vim.keymap.set("n", "Y", confirm, opts)
-  vim.keymap.set("n", "n", cancel, opts)
-  vim.keymap.set("n", "N", cancel, opts)
-  vim.keymap.set("n", "q", cancel, opts)
-  vim.keymap.set("n", "<Esc>", cancel, opts)
+  local function do_confirm() close() on_confirm() end
+  local function do_deny() close() on_deny() end
+  local function do_revert() close() on_revert() end
+  
+  local function on_enter()
+      if selected_idx == 1 then do_confirm()
+      elseif selected_idx == 2 then do_deny()
+      elseif selected_idx == 3 then do_revert() end
+  end
+  
+  local function move_right()
+      selected_idx = selected_idx + 1
+      if selected_idx > 3 then selected_idx = 1 end
+      draw_selection()
+  end
+  local function move_left()
+      selected_idx = selected_idx - 1
+      if selected_idx < 1 then selected_idx = 3 end
+      draw_selection()
+  end
+
+  vim.keymap.set("n", "y", do_confirm, opts)
+  vim.keymap.set("n", "Y", do_confirm, opts)
+  vim.keymap.set("n", "n", do_deny, opts)
+  vim.keymap.set("n", "N", do_deny, opts)
+  vim.keymap.set("n", "r", do_revert, opts)
+  vim.keymap.set("n", "R", do_revert, opts)
+  vim.keymap.set("n", "q", do_deny, opts)
+  vim.keymap.set("n", "<Esc>", do_deny, opts)
+  vim.keymap.set("n", "<CR>", on_enter, opts)
+  vim.keymap.set("n", "<Space>", on_enter, opts)
+  
+  vim.keymap.set("n", "l", move_right, opts)
+  vim.keymap.set("n", "<Right>", move_right, opts)
+  vim.keymap.set("n", "<Tab>", move_right, opts)
+  vim.keymap.set("n", "h", move_left, opts)
+  vim.keymap.set("n", "<Left>", move_left, opts)
+  vim.keymap.set("n", "<S-Tab>", move_left, opts)
 end
 
 --- Handles BufWriteCmd for the current pane to manage file system changes.
@@ -523,7 +589,7 @@ function M.save_changes(on_complete)
       table.insert(summary_lines, "[-] " .. item.name)
   end
   
-  open_confirmation_window(summary_lines, function()
+  local function handle_confirm()
         -- Apply Changes
         for _, item in ipairs(renames) do
             local new_full_path = Path:new(state.current_dir, item.to.name):__tostring()
@@ -553,10 +619,23 @@ function M.save_changes(on_complete)
             M.render_parent_pane()
             if on_complete then on_complete(true) end
         end)
-  end, function()
-        vim.notify("Triad: Changes cancelled. Press 'u' to undo edits.")
+  end
+
+  local function handle_deny()
+        vim.notify("Triad: Changes cancelled. Buffer remains modified.")
         if on_complete then on_complete(false) end
-  end)
+  end
+
+  local function handle_revert()
+      vim.notify("Triad: Reverting changes...")
+      vim.schedule(function()
+          M.render_current_pane() -- Reload from disk
+          vim.api.nvim_buf_set_option(state.current_buf_id, "modified", false)
+          if on_complete then on_complete(false) end
+      end)
+  end
+  
+  open_confirmation_window(summary_lines, handle_confirm, handle_deny, handle_revert)
 end
 
 --- Sets up the autocommands for the current buffer for file system changes.

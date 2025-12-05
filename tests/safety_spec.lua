@@ -28,8 +28,12 @@ end
 
 describe("Triad Safety", function()
   local temp_dir
+  local original_notify
 
   before_each(function()
+    original_notify = vim.notify
+    vim.notify = function(...) end
+
     if state.current_win_id and vim.api.nvim_win_is_valid(state.current_win_id) then
        require("triad.ui").close_layout()
     end
@@ -39,6 +43,7 @@ describe("Triad Safety", function()
   end)
 
   after_each(function()
+    vim.notify = original_notify
     if temp_dir:exists() then
       temp_dir:rm({ recursive = true })
     end
@@ -57,7 +62,7 @@ describe("Triad Safety", function()
     
     -- Trigger Save
     vim.cmd("write")
-    vim.wait(50) -- Wait for async logic
+    vim.wait(200) -- Increased wait time
 
     -- Check for confirmation window
     local found = false
@@ -77,16 +82,21 @@ describe("Triad Safety", function()
     assert.truthy(content:match("%[%-%].*delete_me%.txt"), "Prompt should mention deleting file")
     
     -- Simulate choosing "No" (cancel) via keymap
-    if conf_buf ~= -1 then
-        local keymaps = vim.api.nvim_buf_get_keymap(conf_buf, "n")
-        for _, map in ipairs(keymaps) do
-            if map.lhs == "n" then
-                map.callback()
-                break
+    local rejected
+    vim.schedule(function() -- Ensure this runs after UI updates
+        if conf_buf ~= -1 then
+            local keymaps = vim.api.nvim_buf_get_keymap(conf_buf, "n")
+            for _, map in ipairs(keymaps) do
+                if map.lhs == "n" then
+                    map.callback()
+                    rejected = true
+                    break
+                end
             end
         end
-    end
-    vim.wait(50)
+    end)
+    vim.wait(100)
+    assert.is_true(rejected, "Could not trigger rejection callback")
     
     -- File should still exist on disk
     local file_path = temp_dir:joinpath("delete_me.txt")
@@ -109,11 +119,14 @@ describe("Triad Safety", function()
     
     -- Trigger Save
     vim.cmd("write")
-    vim.wait(50)
+    vim.wait(200)
     
-    -- Confirm
-    trigger_confirm()
+    local confirmed
+    vim.schedule(function()
+        confirmed = trigger_confirm()
+    end)
     vim.wait(100) 
+    assert.is_true(confirmed, "Could not trigger confirmation callback")
 
     -- Assertions
     local file_path = temp_dir:joinpath("delete_me.txt")

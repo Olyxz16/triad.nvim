@@ -30,8 +30,12 @@ end
 describe("Triad Directory Handling", function()
   local temp_dir
   local subdir_name = "subdir"
+  local original_notify
 
   before_each(function()
+    original_notify = vim.notify
+    vim.notify = function(...) end
+
     -- Clean up
     if state.current_win_id and vim.api.nvim_win_is_valid(state.current_win_id) then
        require("triad.ui").close_layout()
@@ -44,6 +48,7 @@ describe("Triad Directory Handling", function()
   end)
 
   after_each(function()
+    vim.notify = original_notify
     if temp_dir:exists() then
       temp_dir:rm({ recursive = true })
     end
@@ -78,11 +83,15 @@ describe("Triad Directory Handling", function()
     
     -- Save
     vim.cmd("write")
-    vim.wait(50)
+    vim.wait(200)
     
     -- Confirm
-    trigger_confirm()
+    local confirmed
+    vim.schedule(function()
+        confirmed = trigger_confirm()
+    end)
     vim.wait(100)
+    assert.is_true(confirmed, "Could not trigger confirmation callback")
 
     local new_dir_path = temp_dir:joinpath("newdir")
     assert.is_true(new_dir_path:exists(), "New directory should exist")
@@ -101,11 +110,15 @@ describe("Triad Directory Handling", function()
     
     -- Save
     vim.cmd("write")
-    vim.wait(50)
+    vim.wait(200)
     
     -- Confirm
-    trigger_confirm()
+    local confirmed
+    vim.schedule(function()
+        confirmed = trigger_confirm()
+    end)
     vim.wait(100)
+    assert.is_true(confirmed, "Could not trigger confirmation callback")
 
     local new_file_path = temp_dir:joinpath("newfile.lua")
     assert.is_true(new_file_path:exists(), "New file should exist")
