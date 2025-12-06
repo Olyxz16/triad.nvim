@@ -62,32 +62,6 @@ describe("Triad Arrow Navigation", function()
     assert.equals(subdir:absolute(), state.current_dir)
   end)
 
-  it("Right arrow opens file", function()
-    vim.api.nvim_set_current_dir(temp_dir:absolute())
-    triad.open()
-    vim.wait(50)
-
-    -- Find file line
-    local lines = vim.api.nvim_buf_get_lines(state.current_buf_id, 0, -1, false)
-    local file_line_idx
-    for i, line in ipairs(lines) do
-      if line:match("file1.txt") then
-        file_line_idx = i
-        break
-      end
-    end
-    vim.api.nvim_win_set_cursor(state.current_win_id, {file_line_idx, 0})
-
-    -- Trigger <Right>
-    vim.api.nvim_feedkeys(vim.api.nvim_replace_termcodes("<Right>", true, false, true), "mx", false)
-    vim.wait(50)
-
-    -- Assert: Should have opened the file (Triad closed or buffer changed to file content)
-    -- Since we mock file opening behavior (via `edit`), the current buffer should likely NOT be the Triad buffer anymore if it opened in the same window, or Triad closed.
-    -- Actually `M.close_layout()` is called.
-    assert.is_false(vim.api.nvim_buf_is_valid(state.current_buf_id), "Triad should close upon opening file")
-  end)
-
   it("Left arrow navigates up", function()
      vim.api.nvim_set_current_dir(subdir:absolute())
      triad.open()

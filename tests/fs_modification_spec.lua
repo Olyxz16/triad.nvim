@@ -193,4 +193,83 @@ describe("FS Modification & Confirmation", function()
      assert.is_true(view_content:find("gamma/", 1, true) ~= nil, "View should show gamma/")
      assert.is_false(vim.api.nvim_buf_get_option(buf, "modified"), "Buffer should not be modified after rejection")
   end)
+
+  it("handles dd deletion correctly without falsely detecting rename", function()
+    -- Regression test for bug where deleting a line (README.md) caused next line (dev_init.lua) 
+    -- to be identified as a rename target.
+    local buf = state.current_buf_id
+    
+    -- Ensure we have specific files for this test
+    local readme = temp_dir:joinpath("README.md")
+    local devinit = temp_dir:joinpath("dev_init.lua")
+    readme:touch()
+    devinit:touch()
+    
+    -- Refresh view
+    vim.api.nvim_set_current_dir(temp_dir:absolute())
+    -- triad.open() -- Already opened in before_each
+    vim.wait(50)
+    
+    -- Force re-render to ensure file list is up to date
+    ui.render_current_pane()
+    vim.wait(50)
+    
+    buf = state.current_buf_id -- update buf ref
+    local lines = vim.api.nvim_buf_get_lines(buf, 0, -1, false)
+    
+    local readme_idx = nil
+    for i, l in ipairs(lines) do
+        if l:match("README.md") then readme_idx = i end
+    end
+    assert.is_not_nil(readme_idx, "README.md not found")
+    
+    -- Simulate dd on README.md
+    vim.api.nvim_win_set_cursor(state.current_win_id, {readme_idx, 0})
+    vim.cmd("normal! dd")
+    
+    vim.cmd("write")
+    
+    local found = vim.wait(1000, function()
+        for _, win in ipairs(vim.api.nvim_list_wins()) do
+            local b = vim.api.nvim_win_get_buf(win)
+            local name = vim.api.nvim_buf_get_name(b)
+            if name:match("triad://confirmation") then
+                return true
+            end
+        end
+        return false
+    end)
+    
+    assert.is_true(found, "Confirmation window not found")
+    
+    local conf_buf = nil
+    for _, win in ipairs(vim.api.nvim_list_wins()) do
+        local b = vim.api.nvim_win_get_buf(win)
+        local name = vim.api.nvim_buf_get_name(b)
+        if name:match("triad://confirmation") then
+            conf_buf = b
+            break
+        end
+    end
+    
+    local conf_lines = vim.api.nvim_buf_get_lines(conf_buf, 0, -1, false)
+    local content = table.concat(conf_lines, "\n")
+    
+    -- Assert we see "[-] README.md"
+    assert.is_true(content:find("%[%-%] README.md") ~= nil, "Should detect deletion of README.md")
+    
+    -- Assert we DO NOT see rename
+    assert.is_nil(content:find("dev_init.lua %->"), "Should NOT detect rename to dev_init.lua")
+    
+    -- Clean up by confirming (or denying, doesn't matter for this test, but confirming cleans state)
+    -- Trigger 'n' to deny and reset
+    local keymaps = vim.api.nvim_buf_get_keymap(conf_buf, "n")
+    for _, map in ipairs(keymaps) do
+        if map.lhs == "n" then
+            map.callback()
+            break
+        end
+    end
+    vim.wait(200)
+  end)
 end)

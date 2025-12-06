@@ -16,7 +16,7 @@ local function setup_devicons()
     if ok then
       devicons = lib
     else
-      vim.notify("Triad: nvim-web-devicons is enabled in config but not found. Disabling.", vim.log.levels.WARN)
+
     end
   end
 end
@@ -560,19 +560,35 @@ function M.save_changes(on_complete)
         
         local current_name = effective_name
 
-        -- Check for Extmark on this line
-        local marks = vim.api.nvim_buf_get_extmarks(state.current_buf_id, M.tracker_ns_id, {i-1, 0}, {i-1, -1}, {})
-        local orig_path = nil
-        for _, m in ipairs(marks) do
-             local id = m[1]
-             if state.tracked_extmarks[id] then
-                 orig_path = state.tracked_extmarks[id]
-                 break
-             end
-        end
-        
-        if orig_path then
-             local orig_name = vim.fn.fnamemodify(orig_path, ":t")
+            -- Check for Extmark on this line
+            local marks = vim.api.nvim_buf_get_extmarks(state.current_buf_id, M.tracker_ns_id, {i-1, 0}, {i-1, -1}, {})
+            local orig_path = nil
+            
+            -- First pass: Try to find an exact name match (handles zombies overlapping valid marks)
+            for _, m in ipairs(marks) do
+                 local id = m[1]
+                 local path = state.tracked_extmarks[id]
+                 if path then
+                     local name = vim.fn.fnamemodify(path, ":t")
+                     if name == current_name then
+                         orig_path = path
+                         break
+                     end
+                 end
+            end
+            
+            -- Second pass: If no exact match, take the first valid one (assumes generic rename)
+            if not orig_path then
+                for _, m in ipairs(marks) do
+                     local id = m[1]
+                     if state.tracked_extmarks[id] then
+                         orig_path = state.tracked_extmarks[id]
+                         break
+                     end
+                end
+            end
+            
+            if orig_path then             local orig_name = vim.fn.fnamemodify(orig_path, ":t")
              if orig_name ~= current_name then
                  table.insert(renames, { from = { name = orig_name, full_path = orig_path }, to = { name = current_name } })
              end
@@ -616,22 +632,22 @@ function M.save_changes(on_complete)
         for _, item in ipairs(renames) do
             local new_full_path = Path:new(state.current_dir, item.to.name):__tostring()
             local ok, err = fs.rename(item.from.full_path, new_full_path)
-            if not ok then vim.notify("Triad: Rename failed: " .. err, vim.log.levels.ERROR) end
+            if not ok then vim.print("Triad: Rename failed: " .. err) end
         end
         for _, item in ipairs(creates) do
             local new_full_path = Path:new(state.current_dir, item.name):__tostring()
             local is_dir = item.raw:sub(-1) == "/"
             if is_dir then
                local ok, err = fs.mkdir(new_full_path)
-               if not ok then vim.notify("Triad: Mkdir failed: " .. err, vim.log.levels.ERROR) end
+               if not ok then vim.print("Triad: Mkdir failed: " .. err) end
             else
                local ok, err = fs.touch(new_full_path)
-               if not ok then vim.notify("Triad: Touch failed: " .. err, vim.log.levels.ERROR) end
+               if not ok then vim.print("Triad: Touch failed: " .. err) end
             end
         end
         for _, item in ipairs(deletes) do
             local ok, err = fs.unlink(item.full_path)
-            if not ok then vim.notify("Triad: Delete failed: " .. err, vim.log.levels.ERROR) end
+            if not ok then vim.print("Triad: Delete failed: " .. err) end
         end
         
         -- Finalize
@@ -644,7 +660,7 @@ function M.save_changes(on_complete)
   end
 
   local function handle_deny()
-        vim.notify("Triad: Changes cancelled. Reverting buffer to original state.")
+
         vim.schedule(function()
             state.is_edit_mode = false -- Allow render to proceed
             M.render_current_pane() -- Reload from disk
@@ -654,7 +670,7 @@ function M.save_changes(on_complete)
   end
   
   local function handle_revert()
-      vim.notify("Triad: Reverting changes...")
+
       vim.schedule(function()
           state.is_edit_mode = false -- Allow render to proceed
           M.render_current_pane() -- Reload from disk
@@ -809,7 +825,7 @@ function M.enable_nav_mode()
   vim.keymap.set("n", "<Left>", go_parent, opts)
   -- Removed 'h' mapping to allow cursor movement
 
-  -- Enter Directory / Open File
+  -- Enter Directory / Open File (for <CR>)
   local open_entry = function()
     local cursor_row = vim.api.nvim_win_get_cursor(0)[1]
     local line_content = vim.api.nvim_buf_get_lines(state.current_buf_id, cursor_row - 1, cursor_row, false)[1]
@@ -836,8 +852,27 @@ function M.enable_nav_mode()
     end
   end
   vim.keymap.set("n", "<CR>", open_entry, opts)
-  -- Removed 'l' mapping to allow cursor movement
-  vim.keymap.set("n", "<Right>", open_entry, opts) -- Allow Right arrow to enter
+
+  -- Enter Directory Only (for <Right>)
+  local enter_dir_only = function()
+    local cursor_row = vim.api.nvim_win_get_cursor(0)[1]
+    local line_content = vim.api.nvim_buf_get_lines(state.current_buf_id, cursor_row - 1, cursor_row, false)[1]
+    if not line_content then return end
+
+    local filename = line_content:match("[^%s]*%s?(.*)")
+    local full_path = Path:new(state.current_dir, filename):__tostring()
+    
+    local stat = vim.uv.fs_stat(full_path)
+    if stat and stat.type == "directory" then
+      save_cursor_position()
+      state.set_current_dir(full_path)
+      M.render_parent_pane()
+      M.render_current_pane()
+      restore_cursor_position()
+      require("triad.git").fetch_git_status()
+    end
+  end
+  vim.keymap.set("n", "<Right>", enter_dir_only, opts) -- Allow Right arrow to enter directory, but not open files
 
   -- Default movement: j, k are standard, no need to map unless we want special behavior
   -- vim.keymap.set("n", "j", "j", opts) 
@@ -883,7 +918,7 @@ function M.create_layout()
   local total_width = math.floor(editor_width * 0.9)
   local total_height = math.floor(editor_height * 0.9)
 
-  local row = math.floor((editor_height - total_height) / 2)
+  local row = math.floor((editor_height - total_height) / 2) - 2
   local col = math.floor((editor_width - total_width) / 2)
 
   local parent_width = math.floor(total_width * state.config.layout.parent_width / 100)
