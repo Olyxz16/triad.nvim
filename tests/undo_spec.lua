@@ -34,7 +34,7 @@ describe("Triad Undo", function()
 
     -- Delete line (dd)
     vim.api.nvim_win_set_cursor(state.current_win_id, {1, 0})
-    vim.fn.feedkeys("dd", "x")
+    vim.cmd("normal! dd")
     
     local lines_after_delete = vim.api.nvim_buf_get_lines(buf, 0, -1, false)
     assert.are_not.same(initial_lines, lines_after_delete)

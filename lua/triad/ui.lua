@@ -257,6 +257,11 @@ function M.render_current_pane()
 
   render_buffer(state.current_buf_id, lines_to_render)
   
+  -- Reset undo history so 'u' doesn't clear the file list
+  local old_undolevels = vim.api.nvim_buf_get_option(state.current_buf_id, "undolevels")
+  vim.api.nvim_buf_set_option(state.current_buf_id, "undolevels", -1)
+  vim.api.nvim_buf_set_option(state.current_buf_id, "undolevels", old_undolevels)
+  
   -- Apply Tracking Extmarks (Must be after render)
   for _, hl in ipairs(highlights) do
       -- Use range extmark (covering first char) to ensure it gets deleted if the line is deleted.
@@ -636,6 +641,7 @@ function M.save_changes(on_complete)
   local function handle_deny()
         vim.notify("Triad: Changes cancelled. Reverting buffer to original state.")
         vim.schedule(function()
+            state.is_edit_mode = false -- Allow render to proceed
             M.render_current_pane() -- Reload from disk
             vim.api.nvim_buf_set_option(state.current_buf_id, "modified", false)
             if on_complete then on_complete(false) end
@@ -645,6 +651,7 @@ function M.save_changes(on_complete)
   local function handle_revert()
       vim.notify("Triad: Reverting changes...")
       vim.schedule(function()
+          state.is_edit_mode = false -- Allow render to proceed
           M.render_current_pane() -- Reload from disk
           vim.api.nvim_buf_set_option(state.current_buf_id, "modified", false)
           if on_complete then on_complete(false) end
@@ -850,9 +857,94 @@ end
 -- We just have one mode where editing is allowed.
 function M.enable_edit_mode(post_action)
   -- Deprecated / Merged.
-  -- If called, ensure we are in the right state?
-  -- Just ensure modifiable is true (it already is).
+  -- Just ensure the buffer is valid.
+  if not vim.api.nvim_buf_is_valid(state.current_buf_id) then return end
+  
+  state.is_edit_mode = true
+  
   if post_action then post_action() end
+end
+
+--- Creates and sets up the three Triad windows (parent, current, preview)
+function M.create_layout()
+  is_closing = false -- Reset guard
+  
+  -- Capture previous window
+  state.prev_win_id = vim.api.nvim_get_current_win()
+
+  local editor_width = vim.api.nvim_get_option("columns")
+  local editor_height = vim.api.nvim_get_option("lines")
+
+  local total_width = math.floor(editor_width * 0.9)
+  local total_height = math.floor(editor_height * 0.9)
+
+  local row = math.floor((editor_height - total_height) / 2)
+  local col = math.floor((editor_width - total_width) / 2)
+
+  local parent_width = math.floor(total_width * state.config.layout.parent_width / 100)
+  local current_width = math.floor(total_width * state.config.layout.current_width / 100)
+  -- Preview takes the rest
+  local preview_width = total_width - parent_width - current_width
+
+  -- Ensure minimum widths
+  parent_width = math.max(parent_width, 15)
+  current_width = math.max(current_width, 30)
+  preview_width = math.max(preview_width, 30)
+  
+  -- Recalculate total width in case minimums pushed it
+  total_width = parent_width + current_width + preview_width
+  -- Re-center
+  col = math.floor((editor_width - total_width) / 2)
+
+  -- Create buffers
+  state.parent_buf_id = create_triad_buffer("parent", "nofile")
+  state.current_buf_id = create_triad_buffer("current", "acwrite")
+  state.preview_buf_id = create_triad_buffer("preview", "nofile")
+
+  -- Create Floating Windows
+  local win_opts = {
+    relative = 'editor',
+    row = row,
+    col = col,
+    width = parent_width,
+    height = total_height,
+    style = 'minimal',
+    border = 'single'
+  }
+
+  -- Parent Window
+  state.parent_win_id = vim.api.nvim_open_win(state.parent_buf_id, true, win_opts)
+  vim.api.nvim_win_set_config(state.parent_win_id, { focusable = false })
+  vim.api.nvim_win_set_option(state.parent_win_id, "winfixwidth", true)
+  vim.api.nvim_win_set_option(state.parent_win_id, "winhighlight", "Normal:Normal,FloatBorder:Normal")
+
+  -- Current Window
+  win_opts.col = col + parent_width + 2 -- +2 for border accounting
+  state.current_win_id = vim.api.nvim_open_win(state.current_buf_id, true, win_opts)
+  vim.api.nvim_win_set_width(state.current_win_id, current_width)
+  vim.api.nvim_win_set_option(state.current_win_id, "winfixwidth", true)
+  
+  -- Use built-in cursorline option instead of manual highlighting to prevent blinking
+  vim.api.nvim_win_set_option(state.current_win_id, "cursorline", true)
+  vim.api.nvim_win_set_option(state.current_win_id, "winhighlight", "Normal:Normal,FloatBorder:Normal,CursorLine:TriadSelectedLine")
+
+  -- Preview Window
+  win_opts.col = col + parent_width + current_width + 4 -- +4 for two previous windows borders
+  state.preview_win_id = vim.api.nvim_open_win(state.preview_buf_id, true, win_opts)
+  vim.api.nvim_win_set_config(state.preview_win_id, { focusable = false })
+  vim.api.nvim_win_set_width(state.preview_win_id, preview_width)
+  vim.api.nvim_win_set_option(state.preview_win_id, "winfixwidth", true)
+  vim.api.nvim_win_set_option(state.preview_win_id, "winhighlight", "Normal:Normal,FloatBorder:Normal")
+
+  -- Set initial cursor to the current pane
+  vim.api.nvim_set_current_win(state.current_win_id)
+
+  M.render_parent_pane()
+  M.render_current_pane()
+  M.setup_file_system_watcher()
+  M.setup_preview_watcher() -- Setup the preview watcher
+  M.setup_autoclose() -- Setup simultaneous close
+  M.enable_nav_mode() -- Initial mode
 end
 
 return M

@@ -30,10 +30,10 @@ describe("Triad Edit Mode", function()
     triad.open()
     vim.wait(50)
 
-    -- Initial state: Nav mode -> modifiable = false
-    assert.is_false(vim.api.nvim_buf_get_option(state.current_buf_id, "modifiable"), "Buffer should be read-only in nav mode")
+    -- Initial state: Always modifiable
+    assert.is_true(vim.api.nvim_buf_get_option(state.current_buf_id, "modifiable"), "Buffer should be modifiable by default")
     
-    -- Trigger edit mode via keymap simulation or direct call
+    -- Trigger edit mode (now just ensures setup/consistency)
     require("triad.ui").enable_edit_mode()
     
     -- Check state: Edit mode -> modifiable = true

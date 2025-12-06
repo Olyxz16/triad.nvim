@@ -51,10 +51,10 @@ describe("Triad Navigation Scroll", function()
     -- Move cursor to it
     vim.api.nvim_win_set_cursor(state.current_win_id, {target_idx, 0})
     
-    -- Enter (Simulate 'l')
+    -- Enter (Simulate '<Right>')
     local keymaps = vim.api.nvim_buf_get_keymap(state.current_buf_id, "n")
     for _, map in ipairs(keymaps) do
-        if map.lhs == "l" then
+        if map.lhs == "<Right>" then
             map.callback()
             break
         end
@@ -63,10 +63,10 @@ describe("Triad Navigation Scroll", function()
     
     assert.equals(many_files_dir:joinpath("middle_dir"):absolute(), state.current_dir)
     
-    -- Go back (Simulate 'h')
+    -- Go back (Simulate '<Left>')
     keymaps = vim.api.nvim_buf_get_keymap(state.current_buf_id, "n")
     for _, map in ipairs(keymaps) do
-        if map.lhs == "h" then
+        if map.lhs == "<Left>" then
             map.callback()
             break
         end

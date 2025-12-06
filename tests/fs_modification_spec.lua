@@ -156,36 +156,35 @@ describe("FS Modification & Confirmation", function()
   end)
 
   it("cancels changes when rejected", function()
-     print("DEBUG TEST: Start 'cancels changes when rejected' test")
      ui.enable_edit_mode()
-     local buf_id_at_start = state.current_buf_id
-     print("DEBUG TEST: Buffer ID at start of test:", buf_id_at_start)
+     local buf = state.current_buf_id
      
      -- Delete everything
-     vim.api.nvim_buf_set_lines(buf_id_at_start, 0, -1, false, {})
-     print("DEBUG TEST: Buffer content after clearing (should be empty):")
-     local cleared_content = vim.api.nvim_buf_get_lines(buf_id_at_start, 0, -1, false)
-     for _, l in ipairs(cleared_content) do print("DEBUG TEST:   " .. l) end
-     print("DEBUG TEST: Content count:", #cleared_content)
-
+     vim.api.nvim_buf_set_lines(buf, 0, -1, false, {})
+     
      vim.cmd("write")
      
      local rejected = wait_and_reject()
      assert.is_true(rejected, "Confirmation window did not appear or 'n' keymap failed")
      
-     local content_updated = vim.wait(500, function() -- Wait up to 500ms for content
-        local lines = vim.api.nvim_buf_get_lines(buf_id_at_start, 0, -1, false)
-        return #lines > 0 -- Content should be restored
+     local content_updated = vim.wait(1000, function() -- Wait up to 1000ms for content
+        local lines = vim.api.nvim_buf_get_lines(buf, 0, -1, false)
+        -- Buffer always has at least 1 line. Wait for more, or non-empty first line.
+        return #lines > 1 or (#lines == 1 and lines[1] ~= "")
      end, 10)
      assert.is_true(content_updated, "Buffer content did not update after rejection")
      
-     print("DEBUG TEST: Final buf_id for assertion:", state.current_buf_id)
-     local current_lines = vim.api.nvim_buf_get_lines(buf_id_at_start, 0, -1, false)
+     local current_lines = vim.api.nvim_buf_get_lines(buf, 0, -1, false)
      local view_content = table.concat(current_lines, "\n")
-     print("DEBUG TEST: Final buffer content (view_content):")
-     for _, l in ipairs(current_lines) do print("DEBUG TEST:   " .. l) end
-     print("DEBUG TEST: Final content count:", #current_lines)
      
+     -- Verify FS untouched
+     assert.is_true(temp_dir:joinpath("alpha.txt"):exists(), "alpha.txt should still exist")
+     
+     -- Verify buffer content is restored to original
+     assert.is_true(view_content:find("alpha.txt", 1, true) ~= nil, "View should show alpha.txt")
+     assert.is_true(view_content:find("beta.lua", 1, true) ~= nil, "View should show beta.lua")
+     assert.is_true(view_content:find("gamma/", 1, true) ~= nil, "View should show gamma/")
+     assert.is_false(vim.api.nvim_buf_get_option(buf, "modified"), "Buffer should not be modified after rejection")
      -- Verify buffer content is restored to original
      local current_lines = vim.api.nvim_buf_get_lines(buf, 0, -1, false)
      local view_content = table.concat(current_lines, "\n")
