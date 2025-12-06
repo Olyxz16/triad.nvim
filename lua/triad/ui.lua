@@ -407,6 +407,8 @@ local function open_confirmation_window(changes, on_confirm, on_deny, on_revert)
     title_pos = "center",
     zindex = 200,
   })
+  vim.api.nvim_set_current_win(win) -- Ensure confirmation window is focused
+  
   
   -- Buttons Layout
   local btn_confirm = "[Confirm (y)]"
