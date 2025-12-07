@@ -5,6 +5,7 @@ local state = require("triad.state")
 local fs = require("triad.fs")
 local preview = require("triad.preview")
 local harpoon = require("triad.harpoon")
+local cache = require("triad.cache")
 local Path = require("plenary.path")
 
 local devicons = nil
@@ -757,6 +758,9 @@ function M.save_changes(on_complete)
             if not ok then vim.print("Triad: Delete failed: " .. err) end
         end
         
+        -- Clear Cache
+        cache.clear()
+        
         -- Finalize
         vim.schedule(function()
             vim.api.nvim_buf_set_option(state.current_buf_id, "modified", false)
@@ -805,16 +809,23 @@ function M.setup_preview_watcher()
     buffer = state.current_buf_id,
     callback = vim.schedule_wrap(function()
       if not vim.api.nvim_buf_is_valid(state.current_buf_id) then return end
-      -- ... rest of logic
+      
       local cursor = vim.api.nvim_win_get_cursor(0)
       local cursor_row = cursor[1]
-      local line_content_with_icons = vim.api.nvim_buf_get_lines(state.current_buf_id, cursor_row - 1, cursor_row, false)[1]
+      -- Optimize: Get only the line we need for immediate preview, 
+      -- but we need all lines for prefetch context. 
+      -- Getting all lines every cursor move might be slow for HUGE directories (thousands of files).
+      -- But nvim_buf_get_lines is fast.
+      local lines = vim.api.nvim_buf_get_lines(state.current_buf_id, 0, -1, false)
+      local line_content_with_icons = lines[cursor_row]
+      
       if not line_content_with_icons then return end
       local line_content = line_content_with_icons:match("[^%s]*%s?(.*)") -- Remove leading icon and space
 
       if line_content and line_content ~= "" then
         local file_path = Path:new(state.current_dir, line_content):__tostring()
         preview.update_preview(file_path)
+        preview.prefetch_surroundings(state.current_dir, cursor_row, lines)
       else
         preview.update_preview(nil)
       end
@@ -1027,6 +1038,7 @@ function M.enable_nav_mode()
   vim.keymap.set("n", ".", function()
     if state.config then
         state.config.show_hidden = not state.config.show_hidden
+        cache.clear()
         M.render_current_pane()
         M.render_parent_pane()
     end
