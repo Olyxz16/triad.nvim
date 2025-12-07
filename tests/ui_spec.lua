@@ -61,8 +61,6 @@ describe("Triad UI Navigation", function()
     vim.api.nvim_win_set_cursor(win, {subdir_line_idx, 0})
 
     -- Trigger Enter (<CR>)
-    -- We can simulate the keypress or call the mapping function. 
-    -- Simulating keypress is better integration test.
     vim.api.nvim_feedkeys(vim.api.nvim_replace_termcodes("<CR>", true, false, true), "mx", false)
     
     -- Wait for async things (if any)

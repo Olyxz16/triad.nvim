@@ -1,4 +1,3 @@
-
 ---@class TriadState
 ---@field current_dir string | nil
 ---@field parent_buf_id number
@@ -8,6 +7,7 @@
 ---@field file_data table
 ---@field original_file_data table<number, string> -- Maps line number to original full path
 ---@field git_status_data table<string, string> -- Maps filename to git status (e.g., " M", "??")
+---@field tracked_extmarks table<number, string> -- Maps extmark ID to original full path
 ---@field config TriadConfig | nil -- Runtime configuration
 
 local M = {}
@@ -24,10 +24,12 @@ M.selected_file = ""
 M.file_data = {} -- Stores data about files in the current pane for diffing/renaming
 M.original_file_data = {}
 M.git_status_data = {}
+M.tracked_extmarks = {}
 M.config = nil
 M.dir_cursor_history = {} -- Maps directory path to last selected filename
 M.is_edit_mode = false
 M.is_git_repo = false
+M.git_root = nil
 
 function M.set_current_dir(path)
   M.current_dir = path
@@ -35,6 +37,7 @@ end
 
 function M.reset_original_file_data()
   M.original_file_data = {}
+  M.tracked_extmarks = {}
 end
 
 return M

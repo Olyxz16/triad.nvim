@@ -1,0 +1,275 @@
+local assert = require("luassert")
+local triad = require("triad")
+local state = require("triad.state")
+local ui = require("triad.ui")
+local Path = require("plenary.path")
+
+-- Robust helper to wait for confirmation window and trigger 'y'
+local function wait_and_confirm()
+    -- Poll for the window to appear
+    local found = vim.wait(1000, function()
+        for _, win in ipairs(vim.api.nvim_list_wins()) do
+            local b = vim.api.nvim_win_get_buf(win)
+            local name = vim.api.nvim_buf_get_name(b)
+            if name:match("triad://confirmation") then
+                return true
+            end
+        end
+        return false
+    end, 10)
+
+    if not found then return false end
+
+    -- Find buffer and trigger callback
+    for _, win in ipairs(vim.api.nvim_list_wins()) do
+        local b = vim.api.nvim_win_get_buf(win)
+        local name = vim.api.nvim_buf_get_name(b)
+        if name:match("triad://confirmation") then
+             local keymaps = vim.api.nvim_buf_get_keymap(b, "n")
+             for _, map in ipairs(keymaps) do
+                 if map.lhs == "y" then
+                     map.callback()
+                     return true
+                 end
+             end
+        end
+    end
+    return false
+end
+
+local function wait_and_reject()
+    local found = vim.wait(1000, function()
+        for _, win in ipairs(vim.api.nvim_list_wins()) do
+            local b = vim.api.nvim_win_get_buf(win)
+            local name = vim.api.nvim_buf_get_name(b)
+            if name:match("triad://confirmation") then
+                return true
+            end
+        end
+        return false
+    end, 10)
+
+    if not found then return false end
+
+    for _, win in ipairs(vim.api.nvim_list_wins()) do
+        local b = vim.api.nvim_win_get_buf(win)
+        local name = vim.api.nvim_buf_get_name(b)
+        if name:match("triad://confirmation") then
+             local keymaps = vim.api.nvim_buf_get_keymap(b, "n")
+             for _, map in ipairs(keymaps) do
+                 if map.lhs == "n" then
+                     map.callback()
+                     return true
+                 end
+             end
+        end
+    end
+    return false
+end
+
+describe("FS Modification & Confirmation", function()
+  local temp_dir
+  local files = { "alpha.txt", "beta.lua", "gamma/" }
+  local original_notify
+
+  before_each(function()
+    -- Mock vim.notify to avoid Hit-Enter prompts
+    original_notify = vim.notify
+    vim.notify = function(...) end
+
+    -- Cleanup windows
+    if state.current_win_id and vim.api.nvim_win_is_valid(state.current_win_id) then
+       ui.close_layout()
+    end
+
+    temp_dir = Path:new(vim.fn.tempname())
+    temp_dir:mkdir()
+    for _, f in ipairs(files) do
+      local p = temp_dir:joinpath(f)
+      if f:sub(-1) == "/" then
+        p:mkdir()
+      else
+        p:touch()
+      end
+    end
+    
+    vim.api.nvim_set_current_dir(temp_dir:absolute())
+    triad.open()
+    vim.wait(50) -- Wait for render
+  end)
+
+  after_each(function()
+    vim.notify = original_notify
+    if temp_dir:exists() then
+      temp_dir:rm({ recursive = true })
+    end
+  end)
+
+  it("detects additions, deletions, and renames", function()
+    -- Enable Edit Mode
+    ui.enable_edit_mode()
+    local buf = state.current_buf_id
+    
+    -- 1. Rename 'alpha.txt' to 'delta.lua'
+    vim.cmd("%s/alpha.txt/delta.lua/e")
+    
+    -- 2. Delete 'beta.lua'
+    local lines = vim.api.nvim_buf_get_lines(buf, 0, -1, false)
+    for i, line in ipairs(lines) do
+        if line:match("beta%.lua") then
+            vim.api.nvim_buf_set_lines(buf, i-1, i, false, {})
+            break
+        end
+    end
+    
+    -- 3. Add 'newfile.js'
+    vim.cmd("$put ='- newfile.js'")
+    
+    -- Trigger Save
+    vim.cmd("write")
+    
+    -- Wait for window to appear (implicit in wait_and_confirm)
+    
+    -- Verify content first? Hard to do async. 
+    -- We rely on wait_and_confirm to check for window existence.
+    
+    -- Check Buttons (Optional, assumed from logic)
+    
+    -- Confirm Changes
+    local confirmed = wait_and_confirm()
+    assert.is_true(confirmed, "Confirmation window did not appear or 'y' keymap failed")
+    
+    -- Wait for FS ops
+    vim.wait(200)
+    
+    -- Verify FS
+    assert.is_false(temp_dir:joinpath("beta.lua"):exists(), "beta.lua should be deleted")
+    assert.is_false(temp_dir:joinpath("alpha.txt"):exists(), "alpha.txt should be gone")
+    assert.is_true(temp_dir:joinpath("delta.lua"):exists(), "delta.lua should exist")
+    assert.is_true(temp_dir:joinpath("newfile.js"):exists(), "newfile.js should exist")
+    
+    -- Verify Triad View updated
+    local current_lines = vim.api.nvim_buf_get_lines(state.current_buf_id, 0, -1, false)
+    local view_content = table.concat(current_lines, "\n")
+    assert.is_true(view_content:find("delta.lua", 1, true) ~= nil, "View should show delta.lua")
+    assert.is_true(view_content:find("beta.lua", 1, true) == nil, "View should not show beta.lua")
+  end)
+
+  it("cancels changes when rejected", function()
+     ui.enable_edit_mode()
+     local buf = state.current_buf_id
+     
+     -- Delete everything
+     vim.api.nvim_buf_set_lines(buf, 0, -1, false, {})
+     
+     vim.cmd("write")
+     
+     local rejected = wait_and_reject()
+     assert.is_true(rejected, "Confirmation window did not appear or 'n' keymap failed")
+     
+     local content_updated = vim.wait(1000, function() -- Wait up to 1000ms for content
+        local lines = vim.api.nvim_buf_get_lines(buf, 0, -1, false)
+        -- Buffer always has at least 1 line. Wait for more, or non-empty first line.
+        return #lines > 1 or (#lines == 1 and lines[1] ~= "")
+     end, 10)
+     assert.is_true(content_updated, "Buffer content did not update after rejection")
+     
+     local current_lines = vim.api.nvim_buf_get_lines(buf, 0, -1, false)
+     local view_content = table.concat(current_lines, "\n")
+     
+     -- Verify FS untouched
+     assert.is_true(temp_dir:joinpath("alpha.txt"):exists(), "alpha.txt should still exist")
+     
+     -- Verify buffer content is restored to original
+     assert.is_true(view_content:find("alpha.txt", 1, true) ~= nil, "View should show alpha.txt")
+     assert.is_true(view_content:find("beta.lua", 1, true) ~= nil, "View should show beta.lua")
+     assert.is_true(view_content:find("gamma/", 1, true) ~= nil, "View should show gamma/")
+     assert.is_false(vim.api.nvim_buf_get_option(buf, "modified"), "Buffer should not be modified after rejection")
+     -- Verify buffer content is restored to original
+     local current_lines = vim.api.nvim_buf_get_lines(buf, 0, -1, false)
+     local view_content = table.concat(current_lines, "\n")
+     assert.is_true(view_content:find("alpha.txt", 1, true) ~= nil, "View should show alpha.txt")
+     assert.is_true(view_content:find("beta.lua", 1, true) ~= nil, "View should show beta.lua")
+     assert.is_true(view_content:find("gamma/", 1, true) ~= nil, "View should show gamma/")
+     assert.is_false(vim.api.nvim_buf_get_option(buf, "modified"), "Buffer should not be modified after rejection")
+  end)
+
+  it("handles dd deletion correctly without falsely detecting rename", function()
+    -- Regression test for bug where deleting a line (README.md) caused next line (dev_init.lua) 
+    -- to be identified as a rename target.
+    local buf = state.current_buf_id
+    
+    -- Ensure we have specific files for this test
+    local readme = temp_dir:joinpath("README.md")
+    local devinit = temp_dir:joinpath("dev_init.lua")
+    readme:touch()
+    devinit:touch()
+    
+    -- Refresh view
+    vim.api.nvim_set_current_dir(temp_dir:absolute())
+    -- triad.open() -- Already opened in before_each
+    vim.wait(50)
+    
+    -- Force re-render to ensure file list is up to date
+    ui.render_current_pane()
+    vim.wait(50)
+    
+    buf = state.current_buf_id -- update buf ref
+    local lines = vim.api.nvim_buf_get_lines(buf, 0, -1, false)
+    
+    local readme_idx = nil
+    for i, l in ipairs(lines) do
+        if l:match("README.md") then readme_idx = i end
+    end
+    assert.is_not_nil(readme_idx, "README.md not found")
+    
+    -- Simulate dd on README.md
+    vim.api.nvim_win_set_cursor(state.current_win_id, {readme_idx, 0})
+    vim.cmd("normal! dd")
+    
+    vim.cmd("write")
+    
+    local found = vim.wait(1000, function()
+        for _, win in ipairs(vim.api.nvim_list_wins()) do
+            local b = vim.api.nvim_win_get_buf(win)
+            local name = vim.api.nvim_buf_get_name(b)
+            if name:match("triad://confirmation") then
+                return true
+            end
+        end
+        return false
+    end)
+    
+    assert.is_true(found, "Confirmation window not found")
+    
+    local conf_buf = nil
+    for _, win in ipairs(vim.api.nvim_list_wins()) do
+        local b = vim.api.nvim_win_get_buf(win)
+        local name = vim.api.nvim_buf_get_name(b)
+        if name:match("triad://confirmation") then
+            conf_buf = b
+            break
+        end
+    end
+    
+    local conf_lines = vim.api.nvim_buf_get_lines(conf_buf, 0, -1, false)
+    local content = table.concat(conf_lines, "\n")
+    
+    -- Assert we see "[-] README.md"
+    assert.is_true(content:find("%[%-%] README.md") ~= nil, "Should detect deletion of README.md")
+    
+    -- Assert we DO NOT see rename
+    assert.is_nil(content:find("dev_init.lua %->"), "Should NOT detect rename to dev_init.lua")
+    
+    -- Clean up by confirming (or denying, doesn't matter for this test, but confirming cleans state)
+    -- Trigger 'n' to deny and reset
+    local keymaps = vim.api.nvim_buf_get_keymap(conf_buf, "n")
+    for _, map in ipairs(keymaps) do
+        if map.lhs == "n" then
+            map.callback()
+            break
+        end
+    end
+    vim.wait(200)
+  end)
+end)

@@ -1,4 +1,3 @@
-
 ---@class TriadUI
 local M = {}
 
@@ -17,7 +16,7 @@ local function setup_devicons()
     if ok then
       devicons = lib
     else
-      vim.notify("Triad: nvim-web-devicons is enabled in config but not found. Disabling.", vim.log.levels.WARN)
+
     end
   end
 end
@@ -51,7 +50,11 @@ local function create_triad_buffer(name, buftype)
   vim.api.nvim_buf_set_option(buf_id, "bufhidden", "wipe")
   vim.api.nvim_buf_set_option(buf_id, "swapfile", false)
   vim.api.nvim_buf_set_option(buf_id, "filetype", "triad")
-  vim.api.nvim_buf_set_option(buf_id, "modifiable", false) -- Default to read-only
+  if buftype == "acwrite" then
+      vim.api.nvim_buf_set_option(buf_id, "modifiable", true)
+  else
+      vim.api.nvim_buf_set_option(buf_id, "modifiable", false)
+  end
   vim.api.nvim_buf_set_option(buf_id, "undolevels", 1000)
   return buf_id
 end
@@ -62,18 +65,46 @@ end
 local function render_buffer(buf_id, lines)
   if not buf_id or not vim.api.nvim_buf_is_valid(buf_id) then return end
 
-  vim.api.nvim_buf_set_option(buf_id, "modifiable", true)
+  -- Only toggle modifiable if it's currently false
+  local was_modifiable = vim.api.nvim_buf_get_option(buf_id, "modifiable")
+  if not was_modifiable then
+      vim.api.nvim_buf_set_option(buf_id, "modifiable", true)
+  end
+  
   vim.api.nvim_buf_set_lines(buf_id, 0, -1, false, lines)
-  vim.api.nvim_buf_set_option(buf_id, "modifiable", false)
+  
+  if not was_modifiable then
+      vim.api.nvim_buf_set_option(buf_id, "modifiable", false)
+  end
 end
 
 --- Renders the contents of the parent directory to the parent pane.
 function M.render_parent_pane()
-  if state.is_edit_mode then return end
   if not state.current_dir then return end
   if not state.parent_buf_id or not vim.api.nvim_buf_is_valid(state.parent_buf_id) then return end
 
   local parent_path_str = Path:new(state.current_dir):parent():__tostring()
+  
+  -- Check if we are at root (parent is same as current)
+  if parent_path_str == state.current_dir or parent_path_str == nil then
+      local icon, icon_hl = get_devicon("/", true)
+      local lines = { icon .. " /" }
+      render_buffer(state.parent_buf_id, lines)
+      
+      vim.api.nvim_buf_clear_namespace(state.parent_buf_id, M.icon_ns_id, 0, -1)
+      if icon_hl ~= "" then
+          vim.api.nvim_buf_set_extmark(state.parent_buf_id, M.icon_ns_id, 0, 0, {
+              end_col = #icon,
+              hl_group = icon_hl,
+          })
+      end
+      vim.api.nvim_buf_set_extmark(state.parent_buf_id, M.icon_ns_id, 0, #icon + 1, {
+          end_col = #lines[1],
+          hl_group = "TriadDirectory",
+      })
+      return
+  end
+
   local files, err = fs.read_dir(parent_path_str)
   if err then
     render_buffer(state.parent_buf_id, { "Error: " .. err })
@@ -129,7 +160,6 @@ end
 
 --- Renders the contents of the current directory to the current pane.
 function M.render_current_pane()
-  if state.is_edit_mode then return end
   if not state.current_dir then return end
   if not state.current_buf_id or not vim.api.nvim_buf_is_valid(state.current_buf_id) then return end
 
@@ -144,14 +174,18 @@ function M.render_current_pane()
   local git_extmarks = {} -- Stores {line_idx, icon, hl_group}
   local highlights = {} -- Stores highlight info
 
+  -- Clear Extmarks
+  vim.api.nvim_buf_clear_namespace(state.current_buf_id, M.tracker_ns_id, 0, -1)
+
   -- Resolve current_dir to real path once for consistent git lookup (handles symlinks)
   local real_current_dir = vim.fn.resolve(state.current_dir)
 
   for i, file_name in ipairs(files) do
-    state.original_file_data[i] = Path:new(state.current_dir, file_name):__tostring()
-    local display_name = file_name
-
     local full_path = Path:new(state.current_dir, file_name):__tostring()
+    state.original_file_data[i] = full_path
+    
+    -- Set Extmark for Tracking
+    local display_name = file_name
     local stat = vim.uv.fs_stat(full_path)
     local is_dir = stat and stat.type == "directory"
 
@@ -177,11 +211,11 @@ function M.render_current_pane()
         icon_end = icon_end,
         is_dir = is_dir,
         name_start = name_start,
-        name_end = name_end
+        name_end = name_end,
+        full_path = full_path -- Store for extmark creation later
     })
 
     -- Git status icon (Extmarks)
-    -- Use real_current_dir for lookup key construction to match git's absolute paths
     local lookup_path = Path:new(real_current_dir, file_name):__tostring()
     if lookup_path:sub(-1) == "/" then lookup_path = lookup_path:sub(1, -2) end
     
@@ -223,6 +257,20 @@ function M.render_current_pane()
 
   render_buffer(state.current_buf_id, lines_to_render)
   
+  -- Reset undo history so 'u' doesn't clear the file list
+  local old_undolevels = vim.api.nvim_buf_get_option(state.current_buf_id, "undolevels")
+  vim.api.nvim_buf_set_option(state.current_buf_id, "undolevels", -1)
+  vim.api.nvim_buf_set_option(state.current_buf_id, "undolevels", old_undolevels)
+  
+  -- Apply Tracking Extmarks (Must be after render)
+  for _, hl in ipairs(highlights) do
+      -- Use range extmark (covering first char) to ensure it gets deleted if the line is deleted.
+      local id = vim.api.nvim_buf_set_extmark(state.current_buf_id, M.tracker_ns_id, hl.line, 0, {
+          end_col = 1
+      })
+      state.tracked_extmarks[id] = hl.full_path
+  end
+
   -- Apply Icon/Dir Highlights
   vim.api.nvim_buf_clear_namespace(state.current_buf_id, M.icon_ns_id, 0, -1)
   for _, hl in ipairs(highlights) do
@@ -253,22 +301,28 @@ end
 local oil_augroup_id = vim.api.nvim_create_augroup("TriadOilEngine", { clear = true })
 local preview_augroup_id = vim.api.nvim_create_augroup("TriadPreview", { clear = true })
 local autoclose_augroup_id = vim.api.nvim_create_augroup("TriadAutoClose", { clear = true })
-local autohighlight_augroup_id = vim.api.nvim_create_augroup("TriadAutoHighlight", { clear = true }) -- New augroup for highlight
+local autohighlight_augroup_id = vim.api.nvim_create_augroup("TriadAutoHighlight", { clear = true })
 
-M.highlight_ns_id = vim.api.nvim_create_namespace("TriadHighlights") -- New namespace for highlight
-M.git_ns_id = vim.api.nvim_create_namespace("TriadGitIcons") -- Namespace for git extmarks
-M.icon_ns_id = vim.api.nvim_create_namespace("TriadIcons") -- Namespace for file icons
+M.highlight_ns_id = vim.api.nvim_create_namespace("TriadHighlights")
+M.git_ns_id = vim.api.nvim_create_namespace("TriadGitIcons")
+M.icon_ns_id = vim.api.nvim_create_namespace("TriadIcons")
+M.tracker_ns_id = vim.api.nvim_create_namespace("TriadFileTracker") -- New namespace
 
 local is_closing = false
 
 -- Define the highlight group for the selected line
-vim.api.nvim_set_hl(0, "TriadSelectedLine", { link = "CursorLine" }) -- Link to 'CursorLine' to span full width
+vim.api.nvim_set_hl(0, "TriadSelectedLine", { link = "CursorLine" })
 vim.api.nvim_set_hl(0, "TriadGitModified", { link = "GitSignsChange", default = true })
 vim.api.nvim_set_hl(0, "TriadGitAdded", { link = "GitSignsAdd", default = true })
 vim.api.nvim_set_hl(0, "TriadGitDeleted", { link = "GitSignsDelete", default = true })
 vim.api.nvim_set_hl(0, "TriadGitConflict", { link = "DiagnosticError", default = true })
 vim.api.nvim_set_hl(0, "TriadGitUntracked", { link = "DiagnosticWarn", default = true })
 vim.api.nvim_set_hl(0, "TriadDirectory", { fg = "Cyan", default = true })
+
+-- Confirmation Window Highlights
+vim.api.nvim_set_hl(0, "TriadConfirmAdd", { fg = "Green", bold = true })
+vim.api.nvim_set_hl(0, "TriadConfirmDelete", { fg = "Red", bold = true })
+vim.api.nvim_set_hl(0, "TriadConfirmChange", { fg = "Yellow", bold = true })
 
 --- Gets the filename from a display line (stripping icons).
 --- @param line string The display line.
@@ -306,26 +360,159 @@ local function restore_cursor_position()
     local fname = get_filename_from_line(line)
     if fname == target_filename then
        pcall(vim.api.nvim_win_set_cursor, state.current_win_id, {i, 0})
-       -- Force redraw/scroll
-       vim.cmd("normal! zz")
+       -- Force redraw/scroll in the correct window
+       vim.api.nvim_win_call(state.current_win_id, function()
+           vim.cmd("normal! zz")
+       end)
        return
     end
   end
 end
 
---- Helper to set/clear line highlight
---- @param buf_id number
---- @param line_num number|nil 1-based line number to highlight, or nil to clear all.
-local function set_line_highlight(buf_id, line_num)
-  if not buf_id or not vim.api.nvim_buf_is_valid(buf_id) then return end
-  vim.api.nvim_buf_clear_namespace(buf_id, M.highlight_ns_id, 0, -1) -- Clear all custom highlights
+--- Opens a confirmation window listing the pending changes.
+--- @param changes table List of formatted strings (lines) to display.
+--- @param on_confirm function Callback when user confirms.
+--- @param on_deny function Callback when user denies.
+--- @param on_revert function Callback when user reverts.
+local function open_confirmation_window(changes, on_confirm, on_deny, on_revert)
+  local function show_window()
+      local buf_name = "triad://confirmation"
+      local existing = vim.fn.bufnr(buf_name)
+      if existing ~= -1 then
+          pcall(vim.api.nvim_buf_delete, existing, { force = true })
+      end
 
-  if line_num then
-    vim.api.nvim_buf_set_extmark(buf_id, M.highlight_ns_id, line_num - 1, 0, {
-        line_hl_group = "TriadSelectedLine",
-        priority = 200,
-    })
+      local buf = vim.api.nvim_create_buf(false, true)
+      vim.api.nvim_buf_set_name(buf, buf_name)
+      vim.api.nvim_buf_set_option(buf, "buftype", "nofile")
+      vim.api.nvim_buf_set_option(buf, "bufhidden", "wipe")
+      vim.api.nvim_buf_set_option(buf, "filetype", "triad_confirm")
+
+      local width = 60
+      -- Determine height: changes + header + buttons.
+      local content_height = #changes + 4
+      local height = math.min(content_height, math.floor(vim.o.lines * 0.8))
+      
+      local row = math.floor((vim.o.lines - height) / 2)
+      local col = math.floor((vim.o.columns - width) / 2)
+
+      local win = vim.api.nvim_open_win(buf, true, {
+        relative = "editor",
+        width = width,
+        height = height,
+        row = row,
+        col = col,
+        style = "minimal",
+        border = "rounded",
+        title = " Confirm Changes ",
+        title_pos = "center",
+        zindex = 200,
+      })
+      vim.api.nvim_set_current_win(win) -- Ensure confirmation window is focused
+      
+      -- Buttons Layout
+      local btn_confirm = "[Confirm (y)]"
+      local btn_deny    = "[Deny (n)]"
+      local btn_revert  = "[Revert (r)]"
+      
+      -- Calculate spacing to center buttons
+      local total_btn_len = #btn_confirm + #btn_deny + #btn_revert + 4 -- 2 spaces between each
+      local start_col = math.floor((width - total_btn_len) / 2)
+      local padding = string.rep(" ", start_col)
+      local buttons_line = padding .. btn_confirm .. "  " .. btn_deny .. "  " .. btn_revert
+      
+      -- Content
+      local lines = { "The following changes will be made:", "" }
+      for _, l in ipairs(changes) do table.insert(lines, l) end
+      table.insert(lines, "")
+      table.insert(lines, buttons_line)
+      
+      vim.api.nvim_buf_set_lines(buf, 0, -1, false, lines)
+      vim.api.nvim_buf_set_option(buf, "modifiable", false)
+
+      -- Highlights
+      local ns_id = vim.api.nvim_create_namespace("TriadConfirm")
+      for i, change_text in ipairs(changes) do
+          local line_idx = i + 1
+          local hl_group = "Normal"
+          if change_text:match("^%[%+.*%]") then hl_group = "TriadConfirmAdd" end
+          if change_text:match("^%[%-.*%]") then hl_group = "TriadConfirmDelete" end
+          if change_text:match("^%[~.*%]") then hl_group = "TriadConfirmChange" end
+          vim.api.nvim_buf_add_highlight(buf, ns_id, hl_group, line_idx, 0, -1)
+      end
+      
+      -- Button Highlights
+      local btn_line_idx = #lines - 1
+      local confirm_start = start_col
+      local confirm_end = confirm_start + #btn_confirm
+      local deny_start = confirm_end + 2
+      local deny_end = deny_start + #btn_deny
+      local revert_start = deny_end + 2
+      local revert_end = revert_start + #btn_revert
+      
+      local selected_idx = 1 -- 1: confirm, 2: deny, 3: revert
+      
+      local function draw_selection()
+          vim.api.nvim_buf_clear_namespace(buf, ns_id, btn_line_idx, btn_line_idx + 1)
+          local hl = "Visual" -- Highlight for selected button
+          
+          if selected_idx == 1 then
+              vim.api.nvim_buf_set_extmark(buf, ns_id, btn_line_idx, confirm_start, { end_col = confirm_end, hl_group = hl })
+          elseif selected_idx == 2 then
+              vim.api.nvim_buf_set_extmark(buf, ns_id, btn_line_idx, deny_start, { end_col = deny_end, hl_group = hl })
+          elseif selected_idx == 3 then
+              vim.api.nvim_buf_set_extmark(buf, ns_id, btn_line_idx, revert_start, { end_col = revert_end, hl_group = hl })
+          end
+      end
+      draw_selection()
+      
+      local function close()
+        if vim.api.nvim_win_is_valid(win) then vim.api.nvim_win_close(win, true) end
+      end
+
+      local opts = { noremap = true, silent = true, buffer = buf }
+      
+      local function do_confirm() close() on_confirm() end
+      local function do_deny() close() on_deny() end
+      local function do_revert() close() on_revert() end
+      
+      local function on_enter()
+          if selected_idx == 1 then do_confirm()
+          elseif selected_idx == 2 then do_deny()
+          elseif selected_idx == 3 then do_revert() end
+      end
+      
+      local function move_right()
+          selected_idx = selected_idx + 1
+          if selected_idx > 3 then selected_idx = 1 end
+          draw_selection()
+      end
+      local function move_left()
+          selected_idx = selected_idx - 1
+          if selected_idx < 1 then selected_idx = 3 end
+          draw_selection()
+      end
+
+      vim.keymap.set("n", "y", do_confirm, opts)
+      vim.keymap.set("n", "Y", do_confirm, opts)
+      vim.keymap.set("n", "n", do_deny, opts)
+      vim.keymap.set("n", "N", do_deny, opts)
+      vim.keymap.set("n", "r", do_revert, opts)
+      vim.keymap.set("n", "R", do_revert, opts)
+      vim.keymap.set("n", "q", do_deny, opts)
+      vim.keymap.set("n", "<Esc>", do_deny, opts)
+      vim.keymap.set("n", "<CR>", on_enter, opts)
+      vim.keymap.set("n", "<Space>", on_enter, opts)
+      
+      vim.keymap.set("n", "l", move_right, opts)
+      vim.keymap.set("n", "<Right>", move_right, opts)
+      vim.keymap.set("n", "<Tab>", move_right, opts)
+      vim.keymap.set("n", "h", move_left, opts)
+      vim.keymap.set("n", "<Left>", move_left, opts)
+      vim.keymap.set("n", "<S-Tab>", move_left, opts)
   end
+  
+  vim.schedule(show_window)
 end
 
 --- Handles BufWriteCmd for the current pane to manage file system changes.
@@ -334,23 +521,22 @@ function M.save_changes(on_complete)
   -- Read current lines from buffer
   local current_lines = vim.api.nvim_buf_get_lines(state.current_buf_id, 0, -1, false)
 
-  -- 1. Identify Original Files (State)
+  -- Build lookup set for original filenames to help parsing
   local original_names_set = {}
-  local original_files_list = {} -- indexed by line number
-  local max_orig_line = 0
-  for line_num, full_path in pairs(state.original_file_data) do
+  for _, full_path in pairs(state.original_file_data) do
     local name = vim.fn.fnamemodify(full_path, ":t")
     original_names_set[name] = true
-    original_files_list[line_num] = { name = name, full_path = full_path }
-    if line_num > max_orig_line then max_orig_line = line_num end
   end
 
-  -- 2. Parse current lines
-  local current_files = {}
-  local current_idx = 1
+  local creates = {}
+  local deletes = {}
+  local renames = {}
+  local processed_paths = {}
+
   for i, line in ipairs(current_lines) do
     -- Skip empty or whitespace-only lines
     if line:match("%S") then
+        -- Parse name using same logic as render to be consistent
         local icon_part, name_part = line:match("^([^%s]*)%s?(.*)")
         local effective_name = line
         local raw_name = line
@@ -371,63 +557,54 @@ function M.save_changes(on_complete)
            effective_name = line:gsub("/$", "")
            raw_name = line
         end
-        current_files[current_idx] = { raw = raw_name, name = effective_name }
-        current_idx = current_idx + 1
-    end
-  end
+        
+        local current_name = effective_name
 
-  -- 3. Calculate Diff
-  local creates = {}
-  local deletes = {}
-  local renames = {}
-  local processed_current = {}
-  local processed_original = {}
-
-  -- Identify Keeps (Same name exists)
-  for i, file_info in ipairs(current_files) do
-    if original_names_set[file_info.name] then
-        processed_current[i] = true
-        -- Mark original instance
-        for orig_i, orig_data in pairs(original_files_list) do
-            if orig_data.name == file_info.name then
-                processed_original[orig_i] = true
-                break
+            -- Check for Extmark on this line
+            local marks = vim.api.nvim_buf_get_extmarks(state.current_buf_id, M.tracker_ns_id, {i-1, 0}, {i-1, -1}, {})
+            local orig_path = nil
+            
+            -- First pass: Try to find an exact name match (handles zombies overlapping valid marks)
+            for _, m in ipairs(marks) do
+                 local id = m[1]
+                 local path = state.tracked_extmarks[id]
+                 if path then
+                     local name = vim.fn.fnamemodify(path, ":t")
+                     if name == current_name then
+                         orig_path = path
+                         break
+                     end
+                 end
             end
+            
+            -- Second pass: If no exact match, take the first valid one (assumes generic rename)
+            if not orig_path then
+                for _, m in ipairs(marks) do
+                     local id = m[1]
+                     if state.tracked_extmarks[id] then
+                         orig_path = state.tracked_extmarks[id]
+                         break
+                     end
+                end
+            end
+            
+            if orig_path then             local orig_name = vim.fn.fnamemodify(orig_path, ":t")
+             if orig_name ~= current_name then
+                 table.insert(renames, { from = { name = orig_name, full_path = orig_path }, to = { name = current_name } })
+             end
+             processed_paths[orig_path] = true
+        else
+             table.insert(creates, { name = current_name, raw = raw_name })
         end
     end
   end
-
-  local max_line = math.max(#current_files, max_orig_line)
-  for i = 1, max_line do
-    local curr = current_files[i]
-    local orig = original_files_list[i]
-    local is_curr_processed = processed_current[i]
-    local is_orig_processed = processed_original[i]
-
-    if curr and not is_curr_processed and orig and not is_orig_processed then
-        table.insert(renames, { from = orig, to = curr })
-        processed_current[i] = true
-        processed_original[i] = true
-    elseif curr and not is_curr_processed then
-        table.insert(creates, curr)
-        processed_current[i] = true
-    elseif orig and not is_orig_processed then
-        table.insert(deletes, orig)
-        processed_original[i] = true
-    end
-  end
   
-  -- Stragglers
-  for line_num, orig_data in pairs(original_files_list) do
-      if not processed_original[line_num] then
-         table.insert(deletes, orig_data)
-         processed_original[line_num] = true
-      end
-  end
-  for i, curr in ipairs(current_files) do
-      if not processed_current[i] then
-        table.insert(creates, curr)
-        processed_current[i] = true
+  -- Detect Deletes: Any tracked path not found in current lines
+  local deleted_paths_set = {}
+  for _, path in pairs(state.tracked_extmarks) do
+      if not processed_paths[path] and not deleted_paths_set[path] then
+          table.insert(deletes, { name = vim.fn.fnamemodify(path, ":t"), full_path = path })
+          deleted_paths_set[path] = true
       end
   end
 
@@ -439,38 +616,38 @@ function M.save_changes(on_complete)
       return
   end
 
-  local summary = {}
-  if #creates > 0 then table.insert(summary, "Create: " .. #creates) end
-  if #renames > 0 then table.insert(summary, "Rename: " .. #renames) end
-  if #deletes > 0 then table.insert(summary, "Delete: " .. #deletes) end
+  local summary_lines = {}
+  for _, item in ipairs(creates) do
+      table.insert(summary_lines, "[+] " .. item.name)
+  end
+  for _, item in ipairs(renames) do
+      table.insert(summary_lines, "[~] " .. item.from.name .. " -> " .. item.to.name)
+  end
+  for _, item in ipairs(deletes) do
+      table.insert(summary_lines, "[-] " .. item.name)
+  end
   
-  local prompt_str = "Apply changes? (" .. table.concat(summary, ", ") .. ")"
-  
-  vim.ui.select({ "Yes", "No" }, {
-    prompt = prompt_str,
-    format_item = function(item) return item end
-  }, function(choice)
-    if choice == "Yes" then
+  local function handle_confirm()
         -- Apply Changes
         for _, item in ipairs(renames) do
             local new_full_path = Path:new(state.current_dir, item.to.name):__tostring()
             local ok, err = fs.rename(item.from.full_path, new_full_path)
-            if not ok then vim.notify("Triad: Rename failed: " .. err, vim.log.levels.ERROR) end
+            if not ok then vim.print("Triad: Rename failed: " .. err) end
         end
         for _, item in ipairs(creates) do
             local new_full_path = Path:new(state.current_dir, item.name):__tostring()
             local is_dir = item.raw:sub(-1) == "/"
             if is_dir then
                local ok, err = fs.mkdir(new_full_path)
-               if not ok then vim.notify("Triad: Mkdir failed: " .. err, vim.log.levels.ERROR) end
+               if not ok then vim.print("Triad: Mkdir failed: " .. err) end
             else
                local ok, err = fs.touch(new_full_path)
-               if not ok then vim.notify("Triad: Touch failed: " .. err, vim.log.levels.ERROR) end
+               if not ok then vim.print("Triad: Touch failed: " .. err) end
             end
         end
         for _, item in ipairs(deletes) do
             local ok, err = fs.unlink(item.full_path)
-            if not ok then vim.notify("Triad: Delete failed: " .. err, vim.log.levels.ERROR) end
+            if not ok then vim.print("Triad: Delete failed: " .. err) end
         end
         
         -- Finalize
@@ -480,11 +657,29 @@ function M.save_changes(on_complete)
             M.render_parent_pane()
             if on_complete then on_complete(true) end
         end)
-    else
-        vim.notify("Triad: Changes cancelled. Press 'u' to undo edits.")
-        if on_complete then on_complete(false) end
-    end
-  end)
+  end
+
+  local function handle_deny()
+
+        vim.schedule(function()
+            state.is_edit_mode = false -- Allow render to proceed
+            M.render_current_pane() -- Reload from disk
+            vim.api.nvim_buf_set_option(state.current_buf_id, "modified", false)
+            if on_complete then on_complete(false) end
+        end)
+  end
+  
+  local function handle_revert()
+
+      vim.schedule(function()
+          state.is_edit_mode = false -- Allow render to proceed
+          M.render_current_pane() -- Reload from disk
+          vim.api.nvim_buf_set_option(state.current_buf_id, "modified", false)
+          if on_complete then on_complete(false) end
+      end)
+  end
+  
+  open_confirmation_window(summary_lines, handle_confirm, handle_deny, handle_revert)
 end
 
 --- Sets up the autocommands for the current buffer for file system changes.
@@ -584,22 +779,18 @@ end
 
 --- Enables Navigation Mode (Read-Only, specialized keymaps)
 function M.enable_nav_mode()
+  -- This function essentially sets up buffer-local mappings and state
+  -- It no longer strictly enforces read-only, but sets up the "Nav" experience.
   if not vim.api.nvim_buf_is_valid(state.current_buf_id) then return end
   
   state.is_edit_mode = false
 
-  -- Clear all existing buffer-local normal mode mappings that might conflict
-  local keys_to_clear = { "q", "h", "-", "l", "<CR>", "j", "k", "e", "<Esc>" } -- Add <Esc> if mapped elsewhere
-  for _, key in ipairs(keys_to_clear) do
-    pcall(vim.keymap.del, "n", key, { buffer = state.current_buf_id })
-  end
-
-  -- Set Read-Only
-  vim.api.nvim_buf_set_option(state.current_buf_id, "modifiable", false)
+  -- Set modifiable=true to allow "edit everywhere"
+  vim.api.nvim_buf_set_option(state.current_buf_id, "modifiable", true)
   
   local opts = { noremap = true, silent = true, buffer = state.current_buf_id }
 
-  -- Re-enable preview watcher since we disabled it in edit mode
+  -- Re-enable preview watcher
   M.setup_preview_watcher()
 
   -- Close panel
@@ -614,7 +805,6 @@ function M.enable_nav_mode()
     local old_dir = state.current_dir
     local parent_path = Path:new(state.current_dir):parent():__tostring()
     
-    -- When going UP, we want to land on the directory we just left.
     if old_dir and parent_path then
        local target = Path:new(old_dir):make_relative(parent_path)
        if target == old_dir then -- failed to make relative
@@ -629,36 +819,13 @@ function M.enable_nav_mode()
     restore_cursor_position()
 
     require("triad.git").fetch_git_status()
-    M.enable_nav_mode() -- Ensure we stay in nav mode (re-applies settings/maps if lost)
+    -- We don't call enable_nav_mode again recursively usually, but if we did, it just resets mappings.
   end
-  vim.keymap.set("n", "h", go_parent, opts)
   vim.keymap.set("n", "-", go_parent, opts)
   vim.keymap.set("n", "<Left>", go_parent, opts)
+  -- Removed 'h' mapping to allow cursor movement
 
-  -- Enter Directory (l key)
-  local enter_dir_only = function()
-    local cursor_row = vim.api.nvim_win_get_cursor(0)[1]
-    local line_content = vim.api.nvim_buf_get_lines(state.current_buf_id, cursor_row - 1, cursor_row, false)[1]
-    if not line_content then return end
-
-    local filename = line_content:match("[^%s]*%s?(.*)")
-    local full_path = Path:new(state.current_dir, filename):__tostring()
-    
-    local stat = vim.uv.fs_stat(full_path)
-    if stat and stat.type == "directory" then
-      save_cursor_position()
-      state.set_current_dir(full_path)
-      M.render_parent_pane()
-      M.render_current_pane()
-      restore_cursor_position()
-      require("triad.git").fetch_git_status()
-      M.enable_nav_mode()
-    end
-  end
-  vim.keymap.set("n", "l", enter_dir_only, opts)
-  vim.keymap.set("n", "<Right>", enter_dir_only, opts)
-
-  -- Open / Enter (CR key)
+  -- Enter Directory / Open File (for <CR>)
   local open_entry = function()
     local cursor_row = vim.api.nvim_win_get_cursor(0)[1]
     local line_content = vim.api.nvim_buf_get_lines(state.current_buf_id, cursor_row - 1, cursor_row, false)[1]
@@ -675,7 +842,6 @@ function M.enable_nav_mode()
       M.render_current_pane()
       restore_cursor_position()
       require("triad.git").fetch_git_status()
-      M.enable_nav_mode()
     elseif stat and stat.type == "file" then
       -- Open file
       M.close_layout()
@@ -687,12 +853,30 @@ function M.enable_nav_mode()
   end
   vim.keymap.set("n", "<CR>", open_entry, opts)
 
-  -- Default movement: j, k
-  vim.keymap.set("n", "j", "j", opts)
-  vim.keymap.set("n", "k", "k", opts)
-  vim.keymap.set("n", "<Down>", "j", opts)
-  vim.keymap.set("n", "<Up>", "k", opts)
+  -- Enter Directory Only (for <Right>)
+  local enter_dir_only = function()
+    local cursor_row = vim.api.nvim_win_get_cursor(0)[1]
+    local line_content = vim.api.nvim_buf_get_lines(state.current_buf_id, cursor_row - 1, cursor_row, false)[1]
+    if not line_content then return end
 
+    local filename = line_content:match("[^%s]*%s?(.*)")
+    local full_path = Path:new(state.current_dir, filename):__tostring()
+    
+    local stat = vim.uv.fs_stat(full_path)
+    if stat and stat.type == "directory" then
+      save_cursor_position()
+      state.set_current_dir(full_path)
+      M.render_parent_pane()
+      M.render_current_pane()
+      restore_cursor_position()
+      require("triad.git").fetch_git_status()
+    end
+  end
+  vim.keymap.set("n", "<Right>", enter_dir_only, opts) -- Allow Right arrow to enter directory, but not open files
+
+  -- Default movement: j, k are standard, no need to map unless we want special behavior
+  -- vim.keymap.set("n", "j", "j", opts) 
+  
   -- Toggle Hidden Files
   vim.keymap.set("n", ".", function()
     if state.config then
@@ -702,110 +886,23 @@ function M.enable_nav_mode()
     end
   end, opts)
 
-  -- Switch to Edit Mode
-  vim.keymap.set("n", "e", function() M.enable_edit_mode() end, opts)
-  
-  -- Implicit Edit Mode triggers
-  vim.keymap.set("n", "i", function() 
-      M.enable_edit_mode(function() vim.cmd("startinsert") end) 
-  end, opts)
-  
-  vim.keymap.set("n", "a", function() 
-      M.enable_edit_mode(function() vim.cmd("startinsert") vim.api.nvim_feedkeys(vim.api.nvim_replace_termcodes("<Right>", true, false, true), "n", false) end) 
-      -- Alternatively, just feed "a"? But we are in normal mode. `startinsert` is `i`. `startinsert!` is `A`.
-      -- `a` is `l` + `i`.
-      -- Simpler: feedkeys.
-  end, opts)
-  
-  -- Re-mapping correctly using feedkeys for robust behavior
-  local function trigger_edit(key)
-      return function()
-          M.enable_edit_mode(function()
-              vim.api.nvim_feedkeys(key, "n", false)
-          end)
-      end
-  end
-
-  vim.keymap.set("n", "i", trigger_edit("i"), opts)
-  vim.keymap.set("n", "I", trigger_edit("I"), opts)
-  vim.keymap.set("n", "a", trigger_edit("a"), opts)
-  vim.keymap.set("n", "A", trigger_edit("A"), opts)
-
-  -- Set up CursorMoved autocommand for line highlighting
-  vim.api.nvim_clear_autocmds({ group = autohighlight_augroup_id })
-  vim.api.nvim_create_autocmd("CursorMoved", {
-    group = autohighlight_augroup_id,
-    buffer = state.current_buf_id,
-    callback = vim.schedule_wrap(function()
-      if not vim.api.nvim_buf_is_valid(state.current_buf_id) then return end
-      local cursor_row = vim.api.nvim_win_get_cursor(0)[1]
-      set_line_highlight(state.current_buf_id, cursor_row)
-    end),
-  })
-  -- Initial highlight
-  local initial_cursor_row = vim.api.nvim_win_get_cursor(0)[1]
-  set_line_highlight(state.current_buf_id, initial_cursor_row)
+  -- Set up CursorMoved autocommand for line highlighting (if we kept it, but we switched to cursorline)
+  -- M.setup_preview_watcher already sets up CursorMoved for preview
 end
 
 --- Enables Edit Mode (Read-Write, standard Vim keymaps)
---- @param post_action function|nil Optional callback to run after enabling edit mode
+-- This function effectively becomes deprecated or just a no-op/setup helper since we merged modes
+-- But we might keep it for API compatibility or just redirect.
+-- Actually, since we are merging, we don't need a separate 'enable_edit_mode'.
+-- We just have one mode where editing is allowed.
 function M.enable_edit_mode(post_action)
+  -- Deprecated / Merged.
+  -- Just ensure the buffer is valid.
   if not vim.api.nvim_buf_is_valid(state.current_buf_id) then return end
   
-  -- Ensure we are in the correct window for normal commands
-  if state.current_win_id and vim.api.nvim_win_is_valid(state.current_win_id) then
-      vim.api.nvim_set_current_win(state.current_win_id)
-  end
-
   state.is_edit_mode = true
-
-  -- Disable preview watcher while editing to prevent focus stealing or overhead
-  if state.current_buf_id then
-      pcall(vim.api.nvim_clear_autocmds, { group = preview_augroup_id, buffer = state.current_buf_id })
-  end
-
-  -- Clear all existing buffer-local normal mode mappings
-  local keys_to_clear = { "q", "h", "-", "l", "<CR>", "j", "k", "e", "i", "a", "I", "A" }
-  for _, key in ipairs(keys_to_clear) do
-      pcall(vim.keymap.del, "n", key, { buffer = state.current_buf_id })
-  end
-
-  local opts = { noremap = true, silent = true, buffer = state.current_buf_id }
-
-  -- Map Esc to exit Edit Mode and Save
-  vim.keymap.set("n", "<Esc>", function()
-    if vim.api.nvim_buf_is_valid(state.current_buf_id) then
-        M.save_changes(function(success)
-            if success then
-                M.enable_nav_mode()
-            end
-        end)
-    end
-  end, opts)
-
-  -- Ensure we are in Normal mode and cursor is visible
-  vim.cmd("normal! Gzz") 
   
-  -- Set Read-Write LAST to ensure it sticks
-  vim.api.nvim_buf_set_option(state.current_buf_id, "modifiable", true)
-  
-  -- Reset undo history to establish the current state as the baseline.
-  -- This ensures that the first edit (e.g., dd) is undoable back to the initial list.
-  local old_undolevels = vim.api.nvim_buf_get_option(state.current_buf_id, "undolevels")
-  if old_undolevels < 1000 then old_undolevels = 1000 end -- Ensure we have levels
-  
-  vim.api.nvim_buf_set_option(state.current_buf_id, "undolevels", -1)
-  vim.api.nvim_buf_set_option(state.current_buf_id, "undolevels", old_undolevels)
-  
-  -- Verify
-  if not vim.api.nvim_buf_get_option(state.current_buf_id, "modifiable") then
-      vim.notify("Triad: Failed to set modifiable=true!", vim.log.levels.ERROR)
-  else
-      vim.notify("Triad: Edit Mode Enabled")
-      if post_action then
-          post_action()
-      end
-  end
+  if post_action then post_action() end
 end
 
 --- Creates and sets up the three Triad windows (parent, current, preview)
@@ -821,7 +918,7 @@ function M.create_layout()
   local total_width = math.floor(editor_width * 0.9)
   local total_height = math.floor(editor_height * 0.9)
 
-  local row = math.floor((editor_height - total_height) / 2)
+  local row = math.floor((editor_height - total_height) / 2) - 2
   local col = math.floor((editor_width - total_width) / 2)
 
   local parent_width = math.floor(total_width * state.config.layout.parent_width / 100)
@@ -866,7 +963,10 @@ function M.create_layout()
   state.current_win_id = vim.api.nvim_open_win(state.current_buf_id, true, win_opts)
   vim.api.nvim_win_set_width(state.current_win_id, current_width)
   vim.api.nvim_win_set_option(state.current_win_id, "winfixwidth", true)
-  vim.api.nvim_win_set_option(state.current_win_id, "winhighlight", "Normal:Normal,FloatBorder:Normal")
+  
+  -- Use built-in cursorline option instead of manual highlighting to prevent blinking
+  vim.api.nvim_win_set_option(state.current_win_id, "cursorline", true)
+  vim.api.nvim_win_set_option(state.current_win_id, "winhighlight", "Normal:Normal,FloatBorder:Normal,CursorLine:TriadSelectedLine")
 
   -- Preview Window
   win_opts.col = col + parent_width + current_width + 4 -- +4 for two previous windows borders

@@ -4,23 +4,38 @@ local state = require("triad.state")
 local Path = require("plenary.path")
 local fs = require("triad.fs")
 
--- Helper to extract filename
-local function get_filename_from_display_line(line)
-  if not line then return nil end
-  local name = line:match("[^%s]*%s?(.*)") or line
-  if name:sub(-1) == "/" then
-      name = name:sub(1, -2)
-  end
-  return name
+local function trigger_confirm()
+    local conf_buf = -1
+    for _, win in ipairs(vim.api.nvim_list_wins()) do
+        local b = vim.api.nvim_win_get_buf(win)
+        local name = vim.api.nvim_buf_get_name(b)
+        if name:match("triad://confirmation") then
+            conf_buf = b
+            break
+        end
+    end
+    
+    if conf_buf ~= -1 then
+        local keymaps = vim.api.nvim_buf_get_keymap(conf_buf, "n")
+        for _, map in ipairs(keymaps) do
+            if map.lhs == "y" then
+                map.callback()
+                return true
+            end
+        end
+    end
+    return false
 end
 
 describe("Triad Directory Handling", function()
   local temp_dir
   local subdir_name = "subdir"
-  local original_select
+  local original_notify
 
   before_each(function()
-    original_select = vim.ui.select
+    original_notify = vim.notify
+    vim.notify = function(...) end
+
     -- Clean up
     if state.current_win_id and vim.api.nvim_win_is_valid(state.current_win_id) then
        require("triad.ui").close_layout()
@@ -33,7 +48,7 @@ describe("Triad Directory Handling", function()
   end)
 
   after_each(function()
-    vim.ui.select = original_select
+    vim.notify = original_notify
     if temp_dir:exists() then
       temp_dir:rm({ recursive = true })
     end
@@ -57,22 +72,26 @@ describe("Triad Directory Handling", function()
   end)
 
   it("creates a new directory when name ends with /", function()
-    vim.ui.select = function(items, opts, on_choice) on_choice("Yes") end
-    
     vim.api.nvim_set_current_dir(temp_dir:absolute())
     triad.open()
     vim.wait(50)
 
     require("triad.ui").enable_edit_mode()
     
-    -- Add a new line "newdir/"
-    local lines = vim.api.nvim_buf_get_lines(state.current_buf_id, 0, -1, false)
-    table.insert(lines, "newdir/")
-    vim.api.nvim_buf_set_lines(state.current_buf_id, 0, -1, false, lines)
+    -- Append a new line "newdir/" safely
+    vim.api.nvim_buf_set_lines(state.current_buf_id, -1, -1, false, {"newdir/"})
     
     -- Save
     vim.cmd("write")
-    vim.wait(100) -- Wait for schedule
+    vim.wait(200)
+    
+    -- Confirm
+    local confirmed
+    vim.schedule(function()
+        confirmed = trigger_confirm()
+    end)
+    vim.wait(100)
+    assert.is_true(confirmed, "Could not trigger confirmation callback")
 
     local new_dir_path = temp_dir:joinpath("newdir")
     assert.is_true(new_dir_path:exists(), "New directory should exist")
@@ -80,22 +99,26 @@ describe("Triad Directory Handling", function()
   end)
   
   it("creates a new file when name does not end with /", function()
-    vim.ui.select = function(items, opts, on_choice) on_choice("Yes") end
-    
     vim.api.nvim_set_current_dir(temp_dir:absolute())
     triad.open()
     vim.wait(50)
 
     require("triad.ui").enable_edit_mode()
     
-    -- Add a new line "newfile.lua"
-    local lines = vim.api.nvim_buf_get_lines(state.current_buf_id, 0, -1, false)
-    table.insert(lines, "newfile.lua")
-    vim.api.nvim_buf_set_lines(state.current_buf_id, 0, -1, false, lines)
+    -- Append a new line "newfile.lua" safely
+    vim.api.nvim_buf_set_lines(state.current_buf_id, -1, -1, false, {"newfile.lua"})
     
     -- Save
     vim.cmd("write")
+    vim.wait(200)
+    
+    -- Confirm
+    local confirmed
+    vim.schedule(function()
+        confirmed = trigger_confirm()
+    end)
     vim.wait(100)
+    assert.is_true(confirmed, "Could not trigger confirmation callback")
 
     local new_file_path = temp_dir:joinpath("newfile.lua")
     assert.is_true(new_file_path:exists(), "New file should exist")

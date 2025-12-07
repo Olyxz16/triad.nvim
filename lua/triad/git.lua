@@ -18,6 +18,7 @@ function M.fetch_git_status()
          -- Not a git repo? Clear status
          state.git_status_data = {}
          state.is_git_repo = false
+         state.git_root = nil
          require("triad.ui").render_current_pane()
          return 
       end
@@ -26,6 +27,7 @@ function M.fetch_git_status()
       if not git_root then return end
 
       state.is_git_repo = true
+      state.git_root = git_root
       
       -- 2. Get Status
       Job:new({
