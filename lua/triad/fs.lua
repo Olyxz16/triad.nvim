@@ -94,6 +94,110 @@ function M.read_dir(path)
 end
 
 ---
+-- Reads the contents of a directory asynchronously.
+-- @param path string The path to the directory.
+-- @param callback function(files: string[]|nil, err: string|nil)
+function M.read_dir_async(path, callback)
+  vim.uv.fs_opendir(path, function(err, dir)
+    if err then
+      callback(nil, "Failed to open directory: " .. err)
+      return
+    end
+
+    local entries_list = {}
+    
+    local function read_next()
+        vim.uv.fs_readdir(dir, function(err, entries)
+            if err then
+                vim.uv.fs_closedir(dir)
+                callback(nil, "Failed to read directory: " .. err)
+                return
+            end
+
+            if not entries then
+                -- End of directory
+                vim.uv.fs_closedir(dir)
+                
+                -- Post-processing (filtering/sorting)
+                -- Need to run this in schedule or safely? It's pure logic, so it's fine.
+                -- However, accessing global state (state.config) in async callback might be race-conditiony?
+                -- Lua is single threaded, so it's fine as long as we don't yield in a weird way.
+                -- But we are in a callback.
+                
+                vim.schedule(function()
+                     -- Check if the path is actually inside the git repo we are tracking
+                      local is_inside_repo = false
+                      if state.is_git_repo and state.git_root then
+                          local resolved_path = vim.fn.resolve(path)
+                          if resolved_path == state.git_root or resolved_path:sub(1, #state.git_root + 1) == state.git_root .. "/" then
+                              is_inside_repo = true
+                          end
+                      end
+
+                      local filtered_entries = {}
+                      for _, entry in ipairs(entries_list) do
+                          local name = entry.name
+                          if name ~= "." and name ~= ".." then
+                            local is_hidden = false
+                            local config_show_hidden = state.config and state.config.show_hidden
+                    
+                            if config_show_hidden then
+                                is_hidden = false
+                            else
+                                if is_inside_repo then
+                                    if name == ".git" then
+                                        is_hidden = true
+                                    else
+                                        local resolved_path = vim.fn.resolve(path)
+                                        local full_path = Path:new(resolved_path, name):__tostring()
+                                        if full_path:sub(-1) == "/" then full_path = full_path:sub(1, -2) end
+                    
+                                        local status = state.git_status_data[full_path]
+                                        if status and (status:sub(1, 1) == "!" or status:match("!!")) then
+                                            is_hidden = true
+                                        end
+                                    end
+                                else
+                                    if name:sub(1, 1) == "." then
+                                        is_hidden = true
+                                    end
+                                end
+                            end
+                    
+                            if not is_hidden then
+                              table.insert(filtered_entries, entry)
+                            end
+                          end
+                      end
+                      
+                      table.sort(filtered_entries, function(a, b)
+                        if a.type == 'directory' and b.type ~= 'directory' then return true end
+                        if a.type ~= 'directory' and b.type == 'directory' then return false end
+                        return a.name < b.name
+                      end)
+                    
+                      local files = {}
+                      for _, entry in ipairs(filtered_entries) do
+                        table.insert(files, entry.name)
+                      end
+                      
+                      callback(files, nil)
+                end)
+                return
+            end
+
+            for _, entry in ipairs(entries) do
+                table.insert(entries_list, entry)
+            end
+            read_next()
+        end)
+    end
+    
+    read_next()
+  end)
+end
+
+---
 -- Renames a file or directory.
 -- @param old_path string The old path.
 -- @param new_path string The new path.
