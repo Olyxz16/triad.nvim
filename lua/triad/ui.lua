@@ -158,8 +158,89 @@ function M.render_parent_pane()
   end
 end
 
+local function format_size(size)
+  if not size then return "-" end
+  if size < 1024 then return size .. " B" end
+  if size < 1024 * 1024 then return string.format("%.1f KB", size / 1024) end
+  return string.format("%.1f MB", size / (1024 * 1024))
+end
+
+local function format_permissions(mode)
+  if not mode then return "---------" end
+  local perms = {
+    [0] = "---", [1] = "--x", [2] = "-w-", [3] = "-wx",
+    [4] = "r--", [5] = "r-x", [6] = "rw-", [7] = "rwx"
+  }
+  
+  local owner = math.floor(mode / 64) % 8
+  local group = math.floor(mode / 8) % 8
+  local other = mode % 8
+  
+  local octal = string.format("%o", mode):sub(-3)
+  return string.format("%s%s%s (%s)", perms[owner], perms[group], perms[other], octal)
+end
+
+--- Renders the bottom status bar.
+function M.render_status_bar()
+  if not state.status_buf_id or not vim.api.nvim_buf_is_valid(state.status_buf_id) then return end
+  
+  local mode_map = {
+      ['n'] = 'NORMAL', ['i'] = 'INSERT', ['v'] = 'VISUAL', ['V'] = 'V-LINE', ['\22'] = 'V-BLOCK',
+      ['R'] = 'REPLACE', ['c'] = 'COMMAND'
+  }
+  local current_mode = vim.fn.mode()
+  local mode_str = mode_map[current_mode] or current_mode:upper()
+  
+  local filename = ""
+  local size_str = "-"
+  local perm_str = "-"
+  
+  if state.current_dir and state.current_buf_id and vim.api.nvim_buf_is_valid(state.current_buf_id) then
+      local cursor = vim.api.nvim_win_get_cursor(state.current_win_id)
+      local line = vim.api.nvim_buf_get_lines(state.current_buf_id, cursor[1]-1, cursor[1], false)[1]
+      if line then
+           local name = line:match("[^%s]*%s?(.*)") or line
+           if name:sub(-1) == "/" then name = name:sub(1, -2) end
+           filename = name
+           
+           if filename ~= "" then
+               local full_path = require("plenary.path"):new(state.current_dir, filename):__tostring()
+               local stat = vim.uv.fs_stat(full_path)
+               if stat then
+                   size_str = format_size(stat.size)
+                   perm_str = format_permissions(stat.mode)
+               end
+           end
+      end
+  end
+  
+  -- Padding
+  local width = vim.api.nvim_win_get_width(state.status_win_id)
+  local text = string.format(" %s │ %s │ %s │ %s", mode_str, filename, size_str, perm_str)
+  render_buffer(state.status_buf_id, { text })
+  
+  vim.api.nvim_buf_clear_namespace(state.status_buf_id, M.highlight_ns_id, 0, -1)
+  vim.api.nvim_buf_add_highlight(state.status_buf_id, M.highlight_ns_id, "Title", 0, 1, #mode_str + 2)
+end
+
+--- Renders the current path to the path bar.
+function M.render_path_bar()
+  if not state.current_dir then return end
+  if not state.path_buf_id or not vim.api.nvim_buf_is_valid(state.path_buf_id) then return end
+  
+  local pretty_path = state.current_dir:gsub(vim.env.HOME, "~")
+  local lines = { " " .. pretty_path }
+  render_buffer(state.path_buf_id, lines)
+  
+  if M.highlight_ns_id then
+      vim.api.nvim_buf_clear_namespace(state.path_buf_id, M.highlight_ns_id, 0, -1)
+      vim.api.nvim_buf_add_highlight(state.path_buf_id, M.highlight_ns_id, "TriadPath", 0, 0, -1)
+  end
+end
+
 --- Renders the contents of the current directory to the current pane.
 function M.render_current_pane()
+  M.render_path_bar()
   if not state.current_dir then return end
   if not state.current_buf_id or not vim.api.nvim_buf_is_valid(state.current_buf_id) then return end
 
@@ -317,7 +398,8 @@ vim.api.nvim_set_hl(0, "TriadGitAdded", { link = "GitSignsAdd", default = true }
 vim.api.nvim_set_hl(0, "TriadGitDeleted", { link = "GitSignsDelete", default = true })
 vim.api.nvim_set_hl(0, "TriadGitConflict", { link = "DiagnosticError", default = true })
 vim.api.nvim_set_hl(0, "TriadGitUntracked", { link = "DiagnosticWarn", default = true })
-vim.api.nvim_set_hl(0, "TriadDirectory", { fg = "Cyan", default = true })
+vim.api.nvim_set_hl(0, "TriadDirectory", { fg = "DarkCyan", default = true })
+vim.api.nvim_set_hl(0, "TriadPath", { link = "Directory", default = true })
 
 -- Confirmation Window Highlights
 vim.api.nvim_set_hl(0, "TriadConfirmAdd", { fg = "Green", bold = true })
@@ -715,6 +797,27 @@ function M.setup_preview_watcher()
   })
 end
 
+--- Sets up the autocommands for the status bar.
+function M.setup_status_watcher()
+  vim.api.nvim_create_autocmd({ "CursorMoved", "CursorMovedI" }, {
+    group = preview_augroup_id,
+    buffer = state.current_buf_id,
+    callback = function()
+       M.render_status_bar()
+    end,
+  })
+  
+  vim.api.nvim_create_autocmd("ModeChanged", {
+    group = preview_augroup_id,
+    pattern = "*",
+    callback = function()
+       if vim.api.nvim_get_current_buf() == state.current_buf_id then
+           M.render_status_bar()
+       end
+    end,
+  })
+end
+
 --- Closes all Triad windows and buffers
 function M.close_layout()
   if is_closing then return end
@@ -730,6 +833,15 @@ function M.close_layout()
   if state.preview_win_id and state.preview_win_id ~= -1 and vim.api.nvim_win_is_valid(state.preview_win_id) then
       pcall(vim.api.nvim_win_close, state.preview_win_id, true)
   end
+  if state.backdrop_win_id and state.backdrop_win_id ~= -1 and vim.api.nvim_win_is_valid(state.backdrop_win_id) then
+      pcall(vim.api.nvim_win_close, state.backdrop_win_id, true)
+  end
+  if state.path_win_id and state.path_win_id ~= -1 and vim.api.nvim_win_is_valid(state.path_win_id) then
+      pcall(vim.api.nvim_win_close, state.path_win_id, true)
+  end
+  if state.status_win_id and state.status_win_id ~= -1 and vim.api.nvim_win_is_valid(state.status_win_id) then
+      pcall(vim.api.nvim_win_close, state.status_win_id, true)
+  end
 
   if vim.api.nvim_buf_is_valid(state.parent_buf_id) then
     pcall(vim.api.nvim_buf_delete, state.parent_buf_id, { force = true })
@@ -739,6 +851,15 @@ function M.close_layout()
   end
   if vim.api.nvim_buf_is_valid(state.preview_buf_id) then
     pcall(vim.api.nvim_buf_delete, state.preview_buf_id, { force = true })
+  end
+  if vim.api.nvim_buf_is_valid(state.backdrop_buf_id) then
+    pcall(vim.api.nvim_buf_delete, state.backdrop_buf_id, { force = true })
+  end
+  if vim.api.nvim_buf_is_valid(state.path_buf_id) then
+    pcall(vim.api.nvim_buf_delete, state.path_buf_id, { force = true })
+  end
+  if vim.api.nvim_buf_is_valid(state.status_buf_id) then
+    pcall(vim.api.nvim_buf_delete, state.status_buf_id, { force = true })
   end
   
   -- Clear autocmds instead of deleting groups to preserve IDs
@@ -915,65 +1036,151 @@ function M.create_layout()
   local editor_width = vim.api.nvim_get_option("columns")
   local editor_height = vim.api.nvim_get_option("lines")
 
-  local total_width = math.floor(editor_width * 0.9)
-  local total_height = math.floor(editor_height * 0.9)
+  -- Target width/height (approx 90%)
+  local initial_total_width = math.floor(editor_width * 0.9)
+  local container_height = math.floor(editor_height * 0.9)
 
-  local row = math.floor((editor_height - total_height) / 2) - 2
-  local col = math.floor((editor_width - total_width) / 2)
-
-  local parent_width = math.floor(total_width * state.config.layout.parent_width / 100)
-  local current_width = math.floor(total_width * state.config.layout.current_width / 100)
+  local parent_width = math.floor(initial_total_width * state.config.layout.parent_width / 100)
+  local current_width = math.floor(initial_total_width * state.config.layout.current_width / 100)
   -- Preview takes the rest
-  local preview_width = total_width - parent_width - current_width
+  local preview_width = initial_total_width - parent_width - current_width
 
   -- Ensure minimum widths
   parent_width = math.max(parent_width, 15)
   current_width = math.max(current_width, 30)
   preview_width = math.max(preview_width, 30)
   
-  -- Recalculate total width in case minimums pushed it
-  total_width = parent_width + current_width + preview_width
-  -- Re-center
-  col = math.floor((editor_width - total_width) / 2)
+  -- Recalculate total width to fit contents + 2 separators
+  local container_width = parent_width + 1 + current_width + 1 + preview_width
+  
+  local row = math.floor((editor_height - container_height) / 2) - 2
+  local col = math.floor((editor_width - container_width) / 2)
 
   -- Create buffers
   state.parent_buf_id = create_triad_buffer("parent", "nofile")
   state.current_buf_id = create_triad_buffer("current", "acwrite")
   state.preview_buf_id = create_triad_buffer("preview", "nofile")
+  state.backdrop_buf_id = create_triad_buffer("backdrop", "nofile")
+  state.path_buf_id = create_triad_buffer("path", "nofile")
+  state.status_buf_id = create_triad_buffer("status", "nofile")
+  
+  -- Render Backdrop Separators
+  local lines = {}
+  
+  -- Line 1: Empty (Space for Path Bar)
+  table.insert(lines, "")
+  
+  -- Line 2: Horizontal Separator (Top)
+  local h_sep_top = string.rep("─", parent_width) .. "┬" .. string.rep("─", current_width) .. "┬" .. string.rep("─", preview_width)
+  table.insert(lines, h_sep_top)
+  
+  -- Line 3..H-2: Vertical Separators
+  local v_sep = string.rep(" ", parent_width) .. "│" .. string.rep(" ", current_width) .. "│"
+  local columns_height = math.max(1, container_height - 4)
+  for _ = 1, columns_height do
+      table.insert(lines, v_sep)
+  end
+  
+  -- Line H-1: Horizontal Separator (Bottom)
+  -- Using '┴' (U+2534)
+  local h_sep_bottom = string.rep("─", parent_width) .. "┴" .. string.rep("─", current_width) .. "┴" .. string.rep("─", preview_width)
+  table.insert(lines, h_sep_bottom)
+  
+  -- Line H: Empty (Space for Status Bar)
+  table.insert(lines, "")
+  
+  render_buffer(state.backdrop_buf_id, lines)
+  vim.api.nvim_buf_set_option(state.backdrop_buf_id, "modifiable", false)
 
-  -- Create Floating Windows
-  local win_opts = {
+  -- Create Backdrop Window (The Container)
+  local backdrop_opts = {
     relative = 'editor',
     row = row,
     col = col,
-    width = parent_width,
-    height = total_height,
+    width = container_width,
+    height = container_height,
     style = 'minimal',
-    border = 'single'
+    border = 'single',
+    zindex = 40
   }
+  state.backdrop_win_id = vim.api.nvim_open_win(state.backdrop_buf_id, true, backdrop_opts)
+  vim.api.nvim_win_set_config(state.backdrop_win_id, { focusable = false })
+  vim.api.nvim_win_set_option(state.backdrop_win_id, "winhighlight", "Normal:Normal,FloatBorder:Normal")
+
+  -- Create Path Window
+  local path_opts = {
+    relative = 'editor',
+    row = row + 1,
+    col = col + 1,
+    width = container_width,
+    height = 1,
+    style = 'minimal',
+    border = 'none',
+    zindex = 45
+  }
+  state.path_win_id = vim.api.nvim_open_win(state.path_buf_id, true, path_opts)
+  vim.api.nvim_win_set_config(state.path_win_id, { focusable = false })
+  vim.api.nvim_win_set_option(state.path_win_id, "winhighlight", "Normal:Normal,FloatBorder:Normal")
+
+  -- Create Status Window
+  local status_opts = {
+    relative = 'editor',
+    row = row + container_height,
+    col = col + 1,
+    width = container_width,
+    height = 1,
+    style = 'minimal',
+    border = 'none',
+    zindex = 45
+  }
+  state.status_win_id = vim.api.nvim_open_win(state.status_buf_id, true, status_opts)
+  vim.api.nvim_win_set_config(state.status_win_id, { focusable = false })
+  vim.api.nvim_win_set_option(state.status_win_id, "winhighlight", "Normal:Normal,FloatBorder:Normal")
 
   -- Parent Window
-  state.parent_win_id = vim.api.nvim_open_win(state.parent_buf_id, true, win_opts)
+  local parent_opts = {
+    relative = 'editor',
+    row = row + 3,
+    col = col + 1,
+    width = parent_width,
+    height = columns_height,
+    style = 'minimal',
+    border = 'none',
+    zindex = 45
+  }
+  state.parent_win_id = vim.api.nvim_open_win(state.parent_buf_id, true, parent_opts)
   vim.api.nvim_win_set_config(state.parent_win_id, { focusable = false })
-  vim.api.nvim_win_set_option(state.parent_win_id, "winfixwidth", true)
   vim.api.nvim_win_set_option(state.parent_win_id, "winhighlight", "Normal:Normal,FloatBorder:Normal")
 
   -- Current Window
-  win_opts.col = col + parent_width + 2 -- +2 for border accounting
-  state.current_win_id = vim.api.nvim_open_win(state.current_buf_id, true, win_opts)
-  vim.api.nvim_win_set_width(state.current_win_id, current_width)
-  vim.api.nvim_win_set_option(state.current_win_id, "winfixwidth", true)
+  local current_opts = {
+    relative = 'editor',
+    row = row + 3,
+    col = col + 1 + parent_width + 1,
+    width = current_width,
+    height = columns_height,
+    style = 'minimal',
+    border = 'none',
+    zindex = 45
+  }
+  state.current_win_id = vim.api.nvim_open_win(state.current_buf_id, true, current_opts)
   
-  -- Use built-in cursorline option instead of manual highlighting to prevent blinking
   vim.api.nvim_win_set_option(state.current_win_id, "cursorline", true)
   vim.api.nvim_win_set_option(state.current_win_id, "winhighlight", "Normal:Normal,FloatBorder:Normal,CursorLine:TriadSelectedLine")
 
   -- Preview Window
-  win_opts.col = col + parent_width + current_width + 4 -- +4 for two previous windows borders
-  state.preview_win_id = vim.api.nvim_open_win(state.preview_buf_id, true, win_opts)
+  local preview_opts = {
+    relative = 'editor',
+    row = row + 3,
+    col = col + 1 + parent_width + 1 + current_width + 1,
+    width = preview_width,
+    height = columns_height,
+    style = 'minimal',
+    border = 'none',
+    zindex = 45
+  }
+  state.preview_win_id = vim.api.nvim_open_win(state.preview_buf_id, true, preview_opts)
   vim.api.nvim_win_set_config(state.preview_win_id, { focusable = false })
-  vim.api.nvim_win_set_width(state.preview_win_id, preview_width)
-  vim.api.nvim_win_set_option(state.preview_win_id, "winfixwidth", true)
   vim.api.nvim_win_set_option(state.preview_win_id, "winhighlight", "Normal:Normal,FloatBorder:Normal")
 
   -- Set initial cursor to the current pane
@@ -981,10 +1188,12 @@ function M.create_layout()
 
   M.render_parent_pane()
   M.render_current_pane()
+  M.render_status_bar() -- Initial Render
   M.setup_file_system_watcher()
-  M.setup_preview_watcher() -- Setup the preview watcher
-  M.setup_autoclose() -- Setup simultaneous close
-  M.enable_nav_mode() -- Initial mode
+  M.setup_preview_watcher()
+  M.setup_status_watcher() -- Setup status watcher
+  M.setup_autoclose()
+  M.enable_nav_mode()
 end
 
 return M
