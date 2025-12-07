@@ -23,6 +23,7 @@ require("lazy").setup({
   -- Dependencies
   { "nvim-lua/plenary.nvim" },
   { "nvim-tree/nvim-web-devicons" },
+  { "ThePrimeagen/harpoon" },
 
   -- YOUR LOCAL PLUGIN
   {

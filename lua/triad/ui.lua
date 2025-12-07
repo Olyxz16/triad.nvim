@@ -4,6 +4,7 @@ local M = {}
 local state = require("triad.state")
 local fs = require("triad.fs")
 local preview = require("triad.preview")
+local harpoon = require("triad.harpoon")
 local Path = require("plenary.path")
 
 local devicons = nil
@@ -253,7 +254,11 @@ function M.render_current_pane()
   state.reset_original_file_data()
   local lines_to_render = {}
   local git_extmarks = {} -- Stores {line_idx, icon, hl_group}
+  local harpoon_extmarks = {}
   local highlights = {} -- Stores highlight info
+  
+  local marks = {}
+  if harpoon.is_available() then marks = harpoon.get_marks() end
 
   -- Clear Extmarks
   vim.api.nvim_buf_clear_namespace(state.current_buf_id, M.tracker_ns_id, 0, -1)
@@ -334,6 +339,14 @@ function M.render_current_pane()
         table.insert(git_extmarks, { i - 1, git_icon, git_hl })
       end
     end
+
+    -- Harpoon Check
+    if harpoon.is_available() then
+        local relative_path = Path:new(full_path):make_relative(vim.uv.cwd())
+        if marks[relative_path] then
+            table.insert(harpoon_extmarks, { i - 1, state.config.harpoon.icon, state.config.harpoon.highlight })
+        end
+    end
   end
 
   render_buffer(state.current_buf_id, lines_to_render)
@@ -377,6 +390,16 @@ function M.render_current_pane()
           virt_text_pos = "right_align",
       })
   end
+
+  -- Apply Harpoon Extmarks
+  vim.api.nvim_buf_clear_namespace(state.current_buf_id, M.harpoon_ns_id, 0, -1)
+  for _, mark in ipairs(harpoon_extmarks) do
+      vim.api.nvim_buf_set_extmark(state.current_buf_id, M.harpoon_ns_id, mark[1], 0, {
+          virt_text = { { mark[2], mark[3] } },
+          virt_text_pos = "right_align",
+          priority = 200,
+      })
+  end
 end
 
 local oil_augroup_id = vim.api.nvim_create_augroup("TriadOilEngine", { clear = true })
@@ -386,6 +409,7 @@ local autohighlight_augroup_id = vim.api.nvim_create_augroup("TriadAutoHighlight
 
 M.highlight_ns_id = vim.api.nvim_create_namespace("TriadHighlights")
 M.git_ns_id = vim.api.nvim_create_namespace("TriadGitIcons")
+M.harpoon_ns_id = vim.api.nvim_create_namespace("TriadHarpoonIcons")
 M.icon_ns_id = vim.api.nvim_create_namespace("TriadIcons")
 M.tracker_ns_id = vim.api.nvim_create_namespace("TriadFileTracker") -- New namespace
 
@@ -398,6 +422,7 @@ vim.api.nvim_set_hl(0, "TriadGitAdded", { link = "GitSignsAdd", default = true }
 vim.api.nvim_set_hl(0, "TriadGitDeleted", { link = "GitSignsDelete", default = true })
 vim.api.nvim_set_hl(0, "TriadGitConflict", { link = "DiagnosticError", default = true })
 vim.api.nvim_set_hl(0, "TriadGitUntracked", { link = "DiagnosticWarn", default = true })
+vim.api.nvim_set_hl(0, "TriadHarpoonMark", { fg = "Yellow", bold = true, default = true })
 vim.api.nvim_set_hl(0, "TriadDirectory", { fg = "DarkCyan", default = true })
 vim.api.nvim_set_hl(0, "TriadPath", { link = "Directory", default = true })
 
@@ -1004,6 +1029,27 @@ function M.enable_nav_mode()
         state.config.show_hidden = not state.config.show_hidden
         M.render_current_pane()
         M.render_parent_pane()
+    end
+  end, opts)
+
+  -- Toggle Harpoon Mark
+  vim.keymap.set("n", "<Tab>", function()
+    local cursor_row = vim.api.nvim_win_get_cursor(0)[1]
+    local line_content = vim.api.nvim_buf_get_lines(state.current_buf_id, cursor_row - 1, cursor_row, false)[1]
+    if not line_content then return end
+
+    local filename = line_content:match("[^%s]*%s?(.*)")
+    if not filename then return end
+    
+    -- Strip trailing slash if directory
+    if filename:sub(-1) == "/" then filename = filename:sub(1, -2) end
+    
+    if filename ~= "" then
+         local full_path = Path:new(state.current_dir, filename):__tostring()
+         if harpoon.is_available() then
+             harpoon.toggle(full_path)
+             M.render_current_pane() -- Refresh to show/hide mark
+         end
     end
   end, opts)
 

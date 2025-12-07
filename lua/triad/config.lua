@@ -29,6 +29,10 @@ config = {
     conflict = '',
     -- Future: colors
   },
+  harpoon = {
+    icon = "✘",
+    highlight = "TriadHarpoonMark",
+  },
   devicons_enabled = true,
   show_hidden = false,
 }
